@@ -88,7 +88,14 @@ public class MainViewModel : ViewModelBase
     public bool IsPracticeRunning
     {
         get => isPracticeRunning;
-        set => SetProperty(ref isPracticeRunning, value);
+        set
+        {
+            if (SetProperty(ref isPracticeRunning, value))
+            {
+                OnPropertyChanged(nameof(CanStartPractice));
+                OnPropertyChanged(nameof(CanDeleteCategory));
+            }
+        }
     }
 
     public bool OverwriteExisting
@@ -106,6 +113,7 @@ public class MainViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(HasSelectedCategory));
                 OnPropertyChanged(nameof(CanStartPractice));
+                OnPropertyChanged(nameof(CanDeleteCategory));
                 _ = UpdateSelectedCategoryQuestionCountAsync();
             }
         }
@@ -164,6 +172,8 @@ public class MainViewModel : ViewModelBase
 
     public bool HasSelectedCategory => SelectedCategory != null;
 
+    public bool CanDeleteCategory => SelectedCategory != null && !IsPracticeRunning;
+
     public bool CanStartPractice =>
         HasSelectedCategory &&
         !IsPracticeRunning &&
@@ -190,6 +200,7 @@ public class MainViewModel : ViewModelBase
     public RelayCommand StartWrongPracticeCommand { get; }
     public RelayCommand ReloadWrongCommand { get; }
     public RelayCommand<Guid?> RemoveWrongCommand { get; }
+    public RelayCommand DeleteCategoryCommand { get; }
 
     public MainViewModel() : this(new PracticeRepository())
     {
@@ -205,6 +216,7 @@ public class MainViewModel : ViewModelBase
         StartWrongPracticeCommand = new RelayCommand(async void () => await StartWrongPracticeAsync());
         ReloadWrongCommand = new RelayCommand(async void () => await ReloadWrongAsync());
         RemoveWrongCommand = new RelayCommand<Guid?>(GuidFromObject(RemoveWrongById));
+        DeleteCategoryCommand = new RelayCommand(async void () => await DeleteCategoryAsync());
 
         _ = LoadAsync();
     }
@@ -432,6 +444,39 @@ public class MainViewModel : ViewModelBase
         await ReloadWrongAsync();
     }
 
+    private async Task DeleteCategoryAsync()
+    {
+        if (SelectedCategory == null)
+        {
+            Feedback = "삭제할 카테고리가 없습니다.";
+            return;
+        }
+
+        if (IsPracticeRunning)
+        {
+            Feedback = "진행 중인 연습이 있어 카테고리를 삭제할 수 없습니다.";
+            return;
+        }
+
+        var target = SelectedCategory;
+        var removed = await repository.RemoveCategoryAsync(target.Id);
+        if (!removed)
+        {
+            Feedback = "카테고리를 찾을 수 없습니다.";
+            return;
+        }
+
+        Categories.Remove(target);
+
+        SelectedCategory = Categories.Count > 0
+            ? Categories[0]
+            : null;
+
+        Feedback = $"카테고리 '{target.Name}' 삭제했습니다.";
+        await UpdateSelectedCategoryQuestionCountAsync();
+        await ReloadWrongAsync();
+    }
+
     private async Task UpdateSelectedCategoryQuestionCountAsync()
     {
         if (SelectedCategory == null)
@@ -456,6 +501,7 @@ public class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanStartWrongPractice));
         OnPropertyChanged(nameof(ProgressDisplay));
         OnPropertyChanged(nameof(HasSelectedCategory));
+        OnPropertyChanged(nameof(CanDeleteCategory));
     }
 
     private static string NormalizeSourceFileName(string sourceFileName)

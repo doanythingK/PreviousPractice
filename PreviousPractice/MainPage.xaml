@@ -22,6 +22,7 @@
                     <HorizontalStackLayout Spacing="8">
                         <Entry WidthRequest="180" Placeholder="새 카테고리" Text="{Binding NewCategoryName}" />
                         <Button Text="추가" Command="{Binding AddCategoryCommand}" IsEnabled="{Binding CanAddCategory}" />
+                        <Button Text="삭제" Command="{Binding DeleteCategoryCommand}" IsEnabled="{Binding CanDeleteCategory}" />
                     </HorizontalStackLayout>
                     <Picker Title="카테고리 선택" ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}" ItemDisplayBinding="{Binding Name}" />
                 </VerticalStackLayout>
