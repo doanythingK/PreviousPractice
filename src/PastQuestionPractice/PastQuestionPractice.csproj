@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net8.0-android;net8.0-ios;net8.0-maccatalyst;net8.0-windows10.0.19041.0</TargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>PastQuestionPractice</RootNamespace>
+    <ApplicationTitle>기출문제 연습프로그램</ApplicationTitle>
+    <ApplicationId>com.sample.pastquestionpractice</ApplicationId>
+    <ApplicationVersion>1.0</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
+    <SupportedOSPlatformVersion>21</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseMaui>true</UseMaui>
+    <SingleProject>true</SingleProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <MauiFont Include="Resources/Fonts/**/*.ttf" />
+    <MauiImage Include="Resources/Images/**/*" />
+  </ItemGroup>
+
+</Project>
