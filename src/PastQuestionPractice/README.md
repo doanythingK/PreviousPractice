@@ -27,7 +27,7 @@
 
 ## 사용 방법
 1. 저장소 경로에서 솔루션 열기  
-   - `PastQuestionPractice.sln`
+   - `PreviousPractice.sln`
 2. MAUI 워크로드가 설치된 환경에서 프로젝트 복원  
    - `dotnet restore src/PastQuestionPractice/PastQuestionPractice.csproj`
 3. 실행(예시)  
