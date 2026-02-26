@@ -1,4 +1,4 @@
-namespace PastQuestionPractice.Models;
+namespace PreviousPractice.Models;
 
 public enum QuestionType
 {

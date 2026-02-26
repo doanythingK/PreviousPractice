@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace PastQuestionPractice.Core;
+namespace PreviousPractice.Core;
 
 public abstract class ViewModelBase : INotifyPropertyChanged
 {

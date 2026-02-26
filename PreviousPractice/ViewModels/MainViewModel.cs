@@ -1,9 +1,9 @@
 using System.Collections.ObjectModel;
-using PastQuestionPractice.Core;
-using PastQuestionPractice.Models;
-using PastQuestionPractice.Services;
+using PreviousPractice.Core;
+using PreviousPractice.Models;
+using PreviousPractice.Services;
 
-namespace PastQuestionPractice.ViewModels;
+namespace PreviousPractice.ViewModels;
 
 public class MainViewModel : ViewModelBase
 {

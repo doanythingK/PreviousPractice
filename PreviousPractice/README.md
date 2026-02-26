@@ -29,21 +29,21 @@
 1. 저장소 경로에서 솔루션 열기  
    - `PreviousPractice.sln`
 2. MAUI 워크로드가 설치된 환경에서 프로젝트 복원  
-   - `dotnet restore PastQuestionPractice/PastQuestionPractice.csproj`
+   - `dotnet restore PreviousPractice/PreviousPractice.csproj`
 3. 실행(예시)  
-   - `dotnet build PastQuestionPractice/PastQuestionPractice.csproj -t:Run -f net8.0-windows10.0.19041.0`
+   - `dotnet build PreviousPractice/PreviousPractice.csproj -t:Run -f net8.0-windows10.0.19041.0`
 
 ## 현재 실행 제한
 - 현재 작업 환경에는 MAUI 템플릿/워크로드가 없어 프로젝트 골격 생성 위주로 구성되었으며,
 실제 앱 실행은 MAUI 워크로드가 구성된 환경에서 수행해야 합니다.
 
 ## 프로젝트 구조
-- `PastQuestionPractice/App.xaml` : 앱 루트 설정
-- `PastQuestionPractice/MainPage.xaml` : 시작 화면(XAML)
-- `PastQuestionPractice/ViewModels` : MVVM ViewModel
-- `PastQuestionPractice/Models` : 도메인 모델(Question, Category 등)
-- `PastQuestionPractice/Services` : 비교/채점 로직
-- `PastQuestionPractice/Infrastructure` : 파싱 유틸리티
+- `PreviousPractice/App.xaml` : 앱 루트 설정
+- `PreviousPractice/MainPage.xaml` : 시작 화면(XAML)
+- `PreviousPractice/ViewModels` : MVVM ViewModel
+- `PreviousPractice/Models` : 도메인 모델(Question, Category 등)
+- `PreviousPractice/Services` : 비교/채점 로직
+- `PreviousPractice/Infrastructure` : 파싱 유틸리티
 
 ## 다음 단계(우선순위)
 1. 카테고리/문제 영속화(SQLite)

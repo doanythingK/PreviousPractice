@@ -3,9 +3,9 @@
   <PropertyGroup>
     <TargetFrameworks>net8.0-android;net8.0-ios;net8.0-maccatalyst;net8.0-windows10.0.19041.0</TargetFrameworks>
     <OutputType>Exe</OutputType>
-    <RootNamespace>PastQuestionPractice</RootNamespace>
+    <RootNamespace>PreviousPractice</RootNamespace>
     <ApplicationTitle>기출문제 연습프로그램</ApplicationTitle>
-    <ApplicationId>com.sample.pastquestionpractice</ApplicationId>
+    <ApplicationId>com.sample.previouspractice</ApplicationId>
     <ApplicationVersion>1.0</ApplicationVersion>
     <ApplicationDisplayVersion>1.0</ApplicationDisplayVersion>
     <SupportedOSPlatformVersion>21</SupportedOSPlatformVersion>

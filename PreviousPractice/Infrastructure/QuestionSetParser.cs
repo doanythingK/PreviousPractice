@@ -1,6 +1,6 @@
-using PastQuestionPractice.Models;
+using PreviousPractice.Models;
 
-namespace PastQuestionPractice.Infrastructure;
+namespace PreviousPractice.Infrastructure;
 
 public static class QuestionSetParser
 {

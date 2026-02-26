@@ -1,4 +1,4 @@
-namespace PastQuestionPractice;
+namespace PreviousPractice;
 
 public static class MauiProgram
 {

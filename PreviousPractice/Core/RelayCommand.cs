@@ -1,6 +1,6 @@
 using System.Windows.Input;
 
-namespace PastQuestionPractice.Core;
+namespace PreviousPractice.Core;
 
 public class RelayCommand : ICommand
 {

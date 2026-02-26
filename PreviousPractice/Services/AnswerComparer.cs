@@ -1,6 +1,6 @@
-using PastQuestionPractice.Models;
+using PreviousPractice.Models;
 
-namespace PastQuestionPractice.Services;
+namespace PreviousPractice.Services;
 
 public static class AnswerComparer
 {

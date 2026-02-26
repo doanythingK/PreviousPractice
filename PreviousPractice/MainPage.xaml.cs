@@ -1,4 +1,4 @@
-namespace PastQuestionPractice;
+namespace PreviousPractice;
 
 public partial class MainPage : ContentPage
 {
