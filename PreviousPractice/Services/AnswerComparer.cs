@@ -33,7 +33,6 @@ public static class AnswerComparer
     {
         return (value ?? string.Empty)
             .Trim()
-            .Replace(" ", string.Empty)
             .ToUpperInvariant();
     }
 

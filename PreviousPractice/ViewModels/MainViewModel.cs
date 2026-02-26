@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
+using System.IO;
 using PreviousPractice.Core;
 using PreviousPractice.Data;
 using PreviousPractice.Infrastructure;
 using PreviousPractice.Models;
 using PreviousPractice.Services;
+using Microsoft.Maui.Storage;
 
 namespace PreviousPractice.ViewModels;
 
@@ -26,9 +28,11 @@ public class MainViewModel : ViewModelBase
     private int currentIndex;
     private int correctCount;
     private int selectedCategoryQuestionCount;
+    private SourceFileSummary? selectedSourceFile;
     private IReadOnlyList<Question> currentSession = Array.Empty<Question>();
 
     public ObservableCollection<Category> Categories { get; } = new();
+    public ObservableCollection<SourceFileSummary> SourceFiles { get; } = new();
     public ObservableCollection<Question> WrongQuestions { get; } = new();
 
     public string NewCategoryName
@@ -94,6 +98,7 @@ public class MainViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(CanStartPractice));
                 OnPropertyChanged(nameof(CanDeleteCategory));
+                OnPropertyChanged(nameof(CanDeleteSourceFile));
             }
         }
     }
@@ -114,7 +119,20 @@ public class MainViewModel : ViewModelBase
                 OnPropertyChanged(nameof(HasSelectedCategory));
                 OnPropertyChanged(nameof(CanStartPractice));
                 OnPropertyChanged(nameof(CanDeleteCategory));
+                OnPropertyChanged(nameof(CanDeleteSourceFile));
                 _ = UpdateSelectedCategoryQuestionCountAsync();
+            }
+        }
+    }
+
+    public SourceFileSummary? SelectedSourceFile
+    {
+        get => selectedSourceFile;
+        set
+        {
+            if (SetProperty(ref selectedSourceFile, value))
+            {
+                OnPropertyChanged(nameof(CanDeleteSourceFile));
             }
         }
     }
@@ -174,6 +192,8 @@ public class MainViewModel : ViewModelBase
 
     public bool CanDeleteCategory => SelectedCategory != null && !IsPracticeRunning;
 
+    public bool CanDeleteSourceFile => SelectedSourceFile != null && SelectedCategory != null && !IsPracticeRunning;
+
     public bool CanStartPractice =>
         HasSelectedCategory &&
         !IsPracticeRunning &&
@@ -201,6 +221,8 @@ public class MainViewModel : ViewModelBase
     public RelayCommand ReloadWrongCommand { get; }
     public RelayCommand<Guid?> RemoveWrongCommand { get; }
     public RelayCommand DeleteCategoryCommand { get; }
+    public RelayCommand<SourceFileSummary?> DeleteSourceFileCommand { get; }
+    public RelayCommand LoadAnswerFileCommand { get; }
 
     public MainViewModel() : this(new PracticeRepository())
     {
@@ -217,6 +239,8 @@ public class MainViewModel : ViewModelBase
         ReloadWrongCommand = new RelayCommand(async void () => await ReloadWrongAsync());
         RemoveWrongCommand = new RelayCommand<Guid?>(GuidFromObject(RemoveWrongById));
         DeleteCategoryCommand = new RelayCommand(async void () => await DeleteCategoryAsync());
+        DeleteSourceFileCommand = new RelayCommand<SourceFileSummary?>(async source => await DeleteSourceFileAsync(source));
+        LoadAnswerFileCommand = new RelayCommand(async void () => await LoadAnswerFileAsync());
 
         _ = LoadAsync();
     }
@@ -290,11 +314,30 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
+        var normalizedSourceFileName = NormalizeSourceFileName(SourceFileName);
+        var shouldOverwrite = OverwriteExisting;
+        if (!shouldOverwrite)
+        {
+            var existingCount = await repository.GetQuestionCountBySourceFileAsync(
+                SelectedCategory.Id,
+                normalizedSourceFileName);
+
+            if (existingCount > 0)
+            {
+                shouldOverwrite = await ConfirmOverwriteImportAsync(normalizedSourceFileName, existingCount);
+                if (!shouldOverwrite)
+                {
+                    Feedback = "문항 반영을 취소했습니다.";
+                    return;
+                }
+            }
+        }
+
         var questions = result.Questions
             .Select(x =>
             {
                 x.CategoryId = SelectedCategory.Id;
-                x.SourceFileName = NormalizeSourceFileName(SourceFileName);
+                x.SourceFileName = normalizedSourceFileName;
                 x.Type = SelectedQuestionType;
                 x.Prompt = string.IsNullOrWhiteSpace(x.Prompt)
                     ? $"{SelectedCategory.Name} - 문항 {x.Index}"
@@ -305,9 +348,9 @@ public class MainViewModel : ViewModelBase
 
         await repository.SaveImportedQuestionsAsync(
             SelectedCategory.Id,
-            questions.Length == 0 ? "manual" : NormalizeSourceFileName(SourceFileName),
+            questions.Length == 0 ? "manual" : normalizedSourceFileName,
             questions,
-            overwriteBySourceFile: OverwriteExisting);
+            overwriteBySourceFile: shouldOverwrite);
 
         var summary = result.HasErrors
             ? $"{questions.Length}개 저장(일부 파싱 오류: {string.Join(", ", result.Errors)})"
@@ -316,7 +359,72 @@ public class MainViewModel : ViewModelBase
         Feedback = summary;
         AnswerMapText = string.Empty;
         await UpdateSelectedCategoryQuestionCountAsync();
+        var sourceFile = SourceFiles.FirstOrDefault(x =>
+            string.Equals(x.SourceFileName, normalizedSourceFileName, StringComparison.OrdinalIgnoreCase));
+        if (sourceFile != null)
+        {
+            SelectedSourceFile = sourceFile;
+        }
         await ReloadWrongAsync();
+    }
+
+    private async Task LoadAnswerFileAsync()
+    {
+        try
+        {
+            var options = new PickOptions
+            {
+                PickerTitle = "정답 파일 선택",
+                FileTypes = new FilePickerFileType(new Dictionary<DevicePlatform, IEnumerable<string>>
+                {
+                    { DevicePlatform.WinUI, new[] { ".txt", ".csv", ".md", ".text" } },
+                    { DevicePlatform.MacCatalyst, new[] { "public.plain-text" } },
+                    { DevicePlatform.iOS, new[] { "public.text" } },
+                    { DevicePlatform.Android, new[] { "text/plain" } },
+                })
+            };
+
+            var file = await FilePicker.PickAsync(options);
+            if (file == null)
+            {
+                Feedback = "정답 파일 선택이 취소되었습니다.";
+                return;
+            }
+
+            await using var stream = await file.OpenReadAsync();
+            using var reader = new StreamReader(stream);
+            var content = await reader.ReadToEndAsync();
+            AnswerMapText = content;
+
+            var fileBaseName = Path.GetFileNameWithoutExtension(file.FileName);
+            if (!string.IsNullOrWhiteSpace(fileBaseName))
+            {
+                SourceFileName = fileBaseName;
+            }
+
+            Feedback = $"정답 파일을 불러왔습니다: {file.Name}";
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"정답 파일을 불러오지 못했습니다: {ex.Message}";
+        }
+    }
+
+    private static async Task<bool> ConfirmOverwriteImportAsync(string sourceFileName, int existingCount)
+    {
+        if (Application.Current?.MainPage == null)
+        {
+            return true;
+        }
+
+        var message = $"'{sourceFileName}' 파일의 문항 {existingCount}개가 이미 등록되어 있습니다.\n" +
+                      "덮어써서 새로 반영하시겠습니까?";
+
+        return await Application.Current.MainPage.DisplayAlert(
+            "문항 반영",
+            message,
+            "덮어쓰기",
+            "취소");
     }
 
     private async Task StartPracticeAsync()
@@ -407,6 +515,8 @@ public class MainViewModel : ViewModelBase
         {
             IsPracticeRunning = false;
             CurrentQuestion = null;
+            OnPropertyChanged(nameof(CurrentQuestionText));
+            OnPropertyChanged(nameof(CurrentQuestionChoicesText));
             SessionFeedback += $"\n총 {CorrectCount}/{SessionTotalCount}개 정답";
             UpdatePracticeState();
             return;
@@ -442,6 +552,61 @@ public class MainViewModel : ViewModelBase
     {
         await repository.RemoveWrongAsync(questionId);
         await ReloadWrongAsync();
+    }
+
+    private async Task DeleteSourceFileAsync(SourceFileSummary? sourceFile)
+    {
+        if (sourceFile == null)
+        {
+            Feedback = "삭제할 파일을 선택해 주세요.";
+            return;
+        }
+
+        if (SelectedCategory == null)
+        {
+            Feedback = "카테고리를 선택해 주세요.";
+            return;
+        }
+
+        if (IsPracticeRunning)
+        {
+            Feedback = "진행 중인 연습이 있어 파일을 삭제할 수 없습니다.";
+            return;
+        }
+
+        var canDelete = await ConfirmDeleteSourceFileAsync(sourceFile.SourceFileName, sourceFile.QuestionCount);
+        if (!canDelete)
+        {
+            Feedback = "문항 파일 삭제를 취소했습니다.";
+            return;
+        }
+
+        var removed = await repository.RemoveQuestionsBySourceFileAsync(SelectedCategory.Id, sourceFile.SourceFileName);
+        if (!removed)
+        {
+            Feedback = "삭제할 문제를 찾을 수 없습니다.";
+            return;
+        }
+
+        Feedback = $"파일 '{sourceFile.SourceFileName}' 문항 {sourceFile.QuestionCount}개 삭제 완료";
+        await UpdateSelectedCategoryQuestionCountAsync();
+        await ReloadWrongAsync();
+    }
+
+    private static async Task<bool> ConfirmDeleteSourceFileAsync(string sourceFileName, int questionCount)
+    {
+        if (Application.Current?.MainPage == null)
+        {
+            return true;
+        }
+
+        var message = $"'{sourceFileName}'의 문항 {questionCount}개를 삭제하시겠습니까?";
+
+        return await Application.Current.MainPage.DisplayAlert(
+            "문항 파일 삭제",
+            message,
+            "삭제",
+            "취소");
     }
 
     private async Task DeleteCategoryAsync()
@@ -507,6 +672,8 @@ public class MainViewModel : ViewModelBase
         if (SelectedCategory == null)
         {
             selectedCategoryQuestionCount = 0;
+            SourceFiles.Clear();
+            SelectedSourceFile = null;
             OnPropertyChanged(nameof(SelectedCategoryQuestionCountText));
             OnPropertyChanged(nameof(MaxPracticeCount));
             UpdatePracticeState();
@@ -515,9 +682,30 @@ public class MainViewModel : ViewModelBase
 
         var questions = await repository.GetQuestionsAsync(SelectedCategory.Id);
         selectedCategoryQuestionCount = questions.Count;
+        await UpdateSourceFilesAsync();
         OnPropertyChanged(nameof(SelectedCategoryQuestionCountText));
         OnPropertyChanged(nameof(MaxPracticeCount));
         UpdatePracticeState();
+    }
+
+    private async Task UpdateSourceFilesAsync()
+    {
+        if (SelectedCategory == null)
+        {
+            SourceFiles.Clear();
+            SelectedSourceFile = null;
+            return;
+        }
+
+        var files = await repository.GetSourceFilesAsync(SelectedCategory.Id);
+        SourceFiles.Clear();
+        foreach (var file in files)
+        {
+            SourceFiles.Add(file);
+        }
+
+        SelectedSourceFile = SourceFiles.FirstOrDefault();
+        OnPropertyChanged(nameof(CanDeleteSourceFile));
     }
 
     private void UpdatePracticeState()
@@ -527,6 +715,7 @@ public class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(ProgressDisplay));
         OnPropertyChanged(nameof(HasSelectedCategory));
         OnPropertyChanged(nameof(CanDeleteCategory));
+        OnPropertyChanged(nameof(CanDeleteSourceFile));
     }
 
     private static string NormalizeSourceFileName(string sourceFileName)
