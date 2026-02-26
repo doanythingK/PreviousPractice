@@ -2,6 +2,7 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              xmlns:viewModels="clr-namespace:PreviousPractice.ViewModels"
+             xmlns:models="clr-namespace:PreviousPractice.Models"
              x:Class="PreviousPractice.MainPage"
              x:DataType="viewModels:MainViewModel"
              x:Name="Root"
@@ -12,21 +13,77 @@
     </ContentPage.BindingContext>
 
     <ScrollView>
-        <VerticalStackLayout Padding="20" Spacing="18">
-            <Label Text="기출문제 연습프로그램" FontSize="30" FontAttributes="Bold" />
-
-            <Entry Placeholder="카테고리 이름" Text="{Binding CategoryName}" />
-
-            <Label Text="정답 매핑(예: 1:3|4,2:정답)" />
-            <Editor HeightRequest="140" Text="{Binding AnswerMapText}" />
-
-            <Button Text="정답 파싱 테스트" Command="{Binding ParseAnswerCommand}" />
-
-            <Label Text="{Binding Feedback}" />
+        <VerticalStackLayout Padding="16" Spacing="16">
+            <Label Text="기출문제 연습프로그램" FontSize="28" FontAttributes="Bold" />
 
             <Frame Padding="12" BorderColor="#CBD5E1" HasShadow="True">
-                <Label Text="오답/카테고리/연습 로직은 다음 단계로 추가 예정입니다." />
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="카테고리" FontAttributes="Bold" />
+                    <HorizontalStackLayout Spacing="8">
+                        <Entry WidthRequest="180" Placeholder="새 카테고리" Text="{Binding NewCategoryName}" />
+                        <Button Text="추가" Command="{Binding AddCategoryCommand}" IsEnabled="{Binding CanAddCategory}" />
+                    </HorizontalStackLayout>
+                    <Picker Title="카테고리 선택" ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}" ItemDisplayBinding="{Binding Name}" />
+                </VerticalStackLayout>
             </Frame>
+
+            <Frame Padding="12" BorderColor="#CBD5E1" HasShadow="True">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="문항 정답 입력" FontAttributes="Bold" />
+                    <Entry Placeholder="문제집 파일명" Text="{Binding SourceFileName}" />
+                    <Editor HeightRequest="120" Placeholder="예: 1:3|4,2:정답" Text="{Binding AnswerMapText}" />
+                    <HorizontalStackLayout Spacing="12">
+                        <Label Text="문항형식" VerticalTextAlignment="Center" />
+                        <Picker WidthRequest="160" SelectedItem="{Binding SelectedQuestionType}" ItemsSource="{Binding QuestionTypes}" />
+                        <Label Text="동일 파일명 덮어쓰기" VerticalTextAlignment="Center" />
+                        <Switch IsToggled="{Binding OverwriteExisting}" />
+                    </HorizontalStackLayout>
+                    <Button Text="문항 반영" Command="{Binding ImportAnswerMapCommand}" />
+                </VerticalStackLayout>
+            </Frame>
+
+            <Frame Padding="12" BorderColor="#CBD5E1" HasShadow="True">
+                <VerticalStackLayout Spacing="8">
+                    <Label Text="연습" FontAttributes="Bold" />
+                    <HorizontalStackLayout Spacing="8">
+                        <Entry WidthRequest="80" Placeholder="갯수" Keyboard="Numeric" Text="{Binding PracticeCountText}" />
+                        <Button Text="연습 시작" Command="{Binding StartPracticeCommand}" IsEnabled="{Binding CanStartPractice}" />
+                        <Button Text="오답 연습" Command="{Binding StartWrongPracticeCommand}" IsEnabled="{Binding CanStartWrongPractice}" />
+                    </HorizontalStackLayout>
+                    <Label Text="{Binding MaxPracticeCount, StringFormat='최대 {0}문항'}" TextColor="#475569" />
+                    <Label Text="{Binding WrongQuestionCount, StringFormat='오답 {0}개'}" TextColor="#0F766E" />
+
+                    <Frame Padding="10" BorderColor="#94A3B8" IsVisible="{Binding IsPracticeRunning}">
+                        <VerticalStackLayout Spacing="6">
+                            <Label Text="진행" />
+                            <Label Text="{Binding ProgressDisplay}" />
+                            <Label Text="{Binding CurrentQuestionText}" FontAttributes="Bold" />
+                            <Label Text="{Binding CurrentQuestionChoicesText}" />
+                            <Entry Placeholder="답 입력" Text="{Binding UserAnswer}" />
+                            <Button Text="채점" Command="{Binding SubmitAnswerCommand}" />
+                            <Label Text="{Binding SessionFeedback}" />
+                        </VerticalStackLayout>
+                    </Frame>
+                </VerticalStackLayout>
+            </Frame>
+
+            <Label Text="오답 노트" FontAttributes="Bold" />
+            <Button Text="오답 목록 새로고침" Command="{Binding ReloadWrongCommand}" />
+            <CollectionView ItemsSource="{Binding WrongQuestions}">
+                <CollectionView.ItemTemplate>
+                    <DataTemplate x:DataType="models:Question">
+                        <Frame Padding="8" Margin="0,0,0,8" BorderColor="#E2E8F0" HasShadow="False">
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="{Binding Prompt}" FontAttributes="Bold" />
+                                <Label Text="{Binding CorrectAnswerDisplay}" />
+                                <Button Text="삭제" Command="{Binding Source={x:Reference Root}, Path=BindingContext.RemoveWrongCommand}" CommandParameter="{Binding Id}" />
+                            </VerticalStackLayout>
+                        </Frame>
+                    </DataTemplate>
+                </CollectionView.ItemTemplate>
+            </CollectionView>
+
+            <Label Text="{Binding Feedback}" TextColor="#DC2626" />
         </VerticalStackLayout>
     </ScrollView>
 </ContentPage>
