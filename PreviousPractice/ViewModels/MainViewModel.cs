@@ -459,6 +459,14 @@ public class MainViewModel : ViewModelBase
         }
 
         var target = SelectedCategory;
+        var questionCount = selectedCategoryQuestionCount;
+        var canDelete = await ConfirmDeleteAsync(target.Name, questionCount);
+        if (!canDelete)
+        {
+            Feedback = "카테고리 삭제를 취소했습니다.";
+            return;
+        }
+
         var removed = await repository.RemoveCategoryAsync(target.Id);
         if (!removed)
         {
@@ -475,6 +483,23 @@ public class MainViewModel : ViewModelBase
         Feedback = $"카테고리 '{target.Name}' 삭제했습니다.";
         await UpdateSelectedCategoryQuestionCountAsync();
         await ReloadWrongAsync();
+    }
+
+    private static async Task<bool> ConfirmDeleteAsync(string categoryName, int questionCount)
+    {
+        if (Application.Current?.MainPage == null)
+        {
+            return true;
+        }
+
+        var message = $"'{categoryName}' 카테고리를 삭제하면 해당 카테고리의 문제와 오답 목록이 함께 삭제됩니다.\n" +
+                      $"{questionCount}개 문항을 모두 삭제하시겠습니까?";
+
+        return await Application.Current.MainPage.DisplayAlert(
+            "카테고리 삭제",
+            message,
+            "삭제",
+            "취소");
     }
 
     private async Task UpdateSelectedCategoryQuestionCountAsync()
