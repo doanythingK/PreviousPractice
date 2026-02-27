@@ -14,6 +14,12 @@ public interface IPracticeRepository
 
     Task<IReadOnlyList<Question>> GetRandomQuestionsAsync(string categoryId, int count, bool includeWrongOnly = false);
 
+    Task<int> GetQuestionCountBySourceFileAsync(string categoryId, string sourceFileName);
+
+    Task<IReadOnlyList<SourceFileSummary>> GetSourceFilesAsync(string categoryId);
+
+    Task<bool> RemoveQuestionsBySourceFileAsync(string categoryId, string sourceFileName);
+
     Task SaveImportedQuestionsAsync(string categoryId, string sourceFileName, IEnumerable<Question> questions, bool overwriteBySourceFile);
 
     Task<IReadOnlyList<Question>> GetWrongQuestionsAsync();

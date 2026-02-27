@@ -12,7 +12,7 @@ public static class QuestionSetParser
 {
     public static AnswerMapParseResult ParseAnswerMapWithDetails(string answerMapText, QuestionType defaultType = QuestionType.MultipleChoice)
     {
-        var list = new List<Question>();
+        var parsedByIndex = new Dictionary<int, Question>();
         var errors = new List<string>();
 
         if (string.IsNullOrWhiteSpace(answerMapText))
@@ -22,7 +22,7 @@ public static class QuestionSetParser
 
         var pairs = answerMapText
             .Replace("\r", string.Empty)
-            .Split(new[] { ',', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            .Split(new[] { ',', '\n', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         foreach (var pair in pairs)
         {
@@ -49,22 +49,33 @@ public static class QuestionSetParser
                 continue;
             }
 
-            list.Add(new Question
+            var question = new Question
             {
                 Index = idx,
                 Type = defaultType,
                 CorrectAnswers = answers,
                 Prompt = $"문항 {idx}",
                 SourceFileName = string.Empty
-            });
+            };
+
+            if (parsedByIndex.ContainsKey(idx))
+            {
+                errors.Add($"문항 중복: {idx} (최근 값으로 반영)");
+            }
+
+            parsedByIndex[idx] = question;
         }
 
-        if (list.Count == 0)
+        if (parsedByIndex.Count == 0)
         {
             return new AnswerMapParseResult(Array.Empty<Question>(), errors, "유효한 정답 데이터가 없습니다.");
         }
 
-        return new AnswerMapParseResult(list, errors, string.Empty);
+        var ordered = parsedByIndex.Values
+            .OrderBy(x => x.Index)
+            .ToList();
+
+        return new AnswerMapParseResult(ordered, errors, string.Empty);
     }
 
     public static (Question[] Questions, string Message) ParseAnswerMap(string answerMapText, QuestionType defaultType = QuestionType.MultipleChoice)

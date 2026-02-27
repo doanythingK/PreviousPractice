@@ -137,6 +137,65 @@ public sealed class PracticeRepository : IPracticeRepository
             .ToList();
     }
 
+    public async Task<int> GetQuestionCountBySourceFileAsync(string categoryId, string sourceFileName)
+    {
+        var normalizedSourceFile = NormalizeSourceFileName(sourceFileName);
+        var state = await LoadStateAsync().ConfigureAwait(false);
+
+        return state.Questions.Count(x =>
+            x.CategoryId == categoryId &&
+            string.Equals(x.SourceFileName, normalizedSourceFile, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public async Task<IReadOnlyList<SourceFileSummary>> GetSourceFilesAsync(string categoryId)
+    {
+        var state = await LoadStateAsync().ConfigureAwait(false);
+
+        return state.Questions
+            .Where(x => x.CategoryId == categoryId)
+            .GroupBy(x => x.SourceFileName)
+            .Select(group => new SourceFileSummary
+            {
+                SourceFileName = group.Key,
+                QuestionCount = group.Count()
+            })
+            .OrderBy(x => x.SourceFileName)
+            .ToList();
+    }
+
+    public async Task<bool> RemoveQuestionsBySourceFileAsync(string categoryId, string sourceFileName)
+    {
+        var normalizedSourceFile = NormalizeSourceFileName(sourceFileName);
+
+        await _sync.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var state = await LoadStateAsync();
+            var target = state.Questions.Where(x =>
+                x.CategoryId == categoryId &&
+                string.Equals(x.SourceFileName, normalizedSourceFile, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (target.Count == 0)
+            {
+                return false;
+            }
+
+            var removedQuestionIds = target.Select(x => x.Id.ToString()).ToList();
+            state.Questions.RemoveAll(x =>
+                x.CategoryId == categoryId &&
+                string.Equals(x.SourceFileName, normalizedSourceFile, StringComparison.OrdinalIgnoreCase));
+
+            CleanupWrongQuestions(state, removedQuestionIds);
+            await SaveStateAsync(state).ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            _sync.Release();
+        }
+    }
+
     public async Task SaveImportedQuestionsAsync(string categoryId, string sourceFileName, IEnumerable<Question> questions, bool overwriteBySourceFile)
     {
         var normalizedSourceFile = NormalizeSourceFileName(sourceFileName);
