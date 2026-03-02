@@ -402,7 +402,7 @@ public class MainViewModel : ViewModelBase
                 SourceFileName = fileBaseName;
             }
 
-            Feedback = $"정답 파일을 불러왔습니다: {file.Name}";
+            Feedback = $"정답 파일을 불러왔습니다: {file.FileName}";
         }
         catch (Exception ex)
         {
