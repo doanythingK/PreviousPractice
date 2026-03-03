@@ -34,7 +34,9 @@ public class MainViewModel : ViewModelBase
     private int currentIndex;
     private int correctCount;
     private int selectedCategoryQuestionCount;
+    private int selectedCategoryPracticeQuestionCount;
     private SourceFileSummary? selectedSourceFile;
+    private bool includeUnansweredInPractice = true;
     private string selectedSourceFileName = string.Empty;
     private IReadOnlyList<Question> currentSession = Array.Empty<Question>();
 
@@ -172,6 +174,20 @@ public class MainViewModel : ViewModelBase
 
     public Array QuestionTypes => Enum.GetValues<QuestionType>();
 
+    public bool IncludeUnansweredInPractice
+    {
+        get => includeUnansweredInPractice;
+        set
+        {
+            if (SetProperty(ref includeUnansweredInPractice, value))
+            {
+                OnPropertyChanged(nameof(MaxPracticeCount));
+                OnPropertyChanged(nameof(CanStartPractice));
+                _ = UpdateSelectedCategoryQuestionCountAsync();
+            }
+        }
+    }
+
     public Question? CurrentQuestion
     {
         get => currentQuestion;
@@ -213,7 +229,10 @@ public class MainViewModel : ViewModelBase
         get => selectedCategoryQuestionCount.ToString();
     }
 
-    public int MaxPracticeCount => selectedCategoryQuestionCount;
+    public int MaxPracticeCount =>
+        IncludeUnansweredInPractice
+            ? selectedCategoryQuestionCount
+            : selectedCategoryPracticeQuestionCount;
 
     public int WrongQuestionCount => WrongQuestions.Count;
 
@@ -699,8 +718,24 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        var questions = await repository.GetRandomQuestionsAsync(SelectedCategory.Id, count);
-        await StartWithQuestionsAsync(questions);
+        var questions = await repository.GetQuestionsAsync(SelectedCategory.Id);
+        var practiceCandidates = (IncludeUnansweredInPractice
+                ? questions
+                : questions.Where(x => x.CorrectAnswers.Any(a => !string.IsNullOrWhiteSpace(a))))
+            .OrderBy(_ => random.Next())
+            .Take(count)
+            .ToList();
+
+        if (practiceCandidates.Count == 0)
+        {
+            Feedback = IncludeUnansweredInPractice
+                ? "출제 가능한 문항이 없습니다."
+                : "정답이 등록된 문항이 없습니다.";
+            return;
+        }
+
+        await StartWithQuestionsAsync(practiceCandidates);
+        
     }
 
     private async Task StartWrongPracticeAsync()
@@ -932,6 +967,7 @@ public class MainViewModel : ViewModelBase
         if (SelectedCategory == null)
         {
             selectedCategoryQuestionCount = 0;
+            selectedCategoryPracticeQuestionCount = 0;
             SourceFiles.Clear();
             SelectedSourceFile = null;
             OnPropertyChanged(nameof(SelectedCategoryQuestionCountText));
@@ -942,6 +978,9 @@ public class MainViewModel : ViewModelBase
 
         var questions = await repository.GetQuestionsAsync(SelectedCategory.Id);
         selectedCategoryQuestionCount = questions.Count;
+        selectedCategoryPracticeQuestionCount = IncludeUnansweredInPractice
+            ? selectedCategoryQuestionCount
+            : questions.Count(x => x.CorrectAnswers.Any(a => !string.IsNullOrWhiteSpace(a)));
         await UpdateSourceFilesAsync();
         OnPropertyChanged(nameof(SelectedCategoryQuestionCountText));
         OnPropertyChanged(nameof(MaxPracticeCount));

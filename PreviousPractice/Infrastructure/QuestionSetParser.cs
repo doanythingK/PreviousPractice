@@ -22,9 +22,37 @@ public static class QuestionSetParser
 
         var pairs = answerMapText
             .Replace("\r", string.Empty)
-            .Split(new[] { ',', '\n', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            .Split(new[] { ',', '\n', ';' }, StringSplitOptions.TrimEntries);
 
-        foreach (var pair in pairs)
+        var hasExplicitMapping = pairs.Any(x => x.Contains(':', StringComparison.Ordinal));
+        if (hasExplicitMapping)
+        {
+            ParseAsExplicitMapping(pairs, defaultType, parsedByIndex, errors);
+        }
+        else
+        {
+            ParseAsAnswerList(pairs, defaultType, parsedByIndex);
+        }
+
+        if (parsedByIndex.Count == 0)
+        {
+            return new AnswerMapParseResult(Array.Empty<Question>(), errors, "유효한 정답 데이터가 없습니다.");
+        }
+
+        var ordered = parsedByIndex.Values
+            .OrderBy(x => x.Index)
+            .ToList();
+
+        return new AnswerMapParseResult(ordered, errors, string.Empty);
+    }
+
+    private static void ParseAsExplicitMapping(
+        IEnumerable<string> pairs,
+        QuestionType defaultType,
+        Dictionary<int, Question> parsedByIndex,
+        IList<string> errors)
+    {
+        foreach (var pair in pairs.Where(x => !string.IsNullOrWhiteSpace(x)))
         {
             var splitted = pair.Split(':', 2);
             if (splitted.Length != 2)
@@ -41,12 +69,12 @@ public static class QuestionSetParser
 
             var answers = splitted[1]
                 .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(x => x.Trim())
                 .ToArray();
 
             if (answers.Length == 0)
             {
                 errors.Add($"정답 없음: {idx}");
-                continue;
             }
 
             var question = new Question
@@ -65,17 +93,37 @@ public static class QuestionSetParser
 
             parsedByIndex[idx] = question;
         }
+    }
 
-        if (parsedByIndex.Count == 0)
+    private static void ParseAsAnswerList(
+        IEnumerable<string> answers,
+        QuestionType defaultType,
+        Dictionary<int, Question> parsedByIndex)
+    {
+        var index = 0;
+        foreach (var rawAnswer in answers)
         {
-            return new AnswerMapParseResult(Array.Empty<Question>(), errors, "유효한 정답 데이터가 없습니다.");
+            index++;
+
+            var token = rawAnswer?.Trim() ?? string.Empty;
+            var splitAnswers = token
+                .Split('|', StringSplitOptions.TrimEntries)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .ToArray();
+
+            var question = new Question
+            {
+                Index = index,
+                Type = defaultType,
+                CorrectAnswers = splitAnswers,
+                Prompt = $"문항 {index}",
+                SourceFileName = string.Empty
+            };
+
+            parsedByIndex[index] = question;
+
         }
-
-        var ordered = parsedByIndex.Values
-            .OrderBy(x => x.Index)
-            .ToList();
-
-        return new AnswerMapParseResult(ordered, errors, string.Empty);
     }
 
     public static (Question[] Questions, string Message) ParseAnswerMap(string answerMapText, QuestionType defaultType = QuestionType.MultipleChoice)

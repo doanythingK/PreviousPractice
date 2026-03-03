@@ -79,6 +79,10 @@
                         <Button Text="연습 시작" Command="{Binding StartPracticeCommand}" IsEnabled="{Binding CanStartPractice}" />
                         <Button Text="오답 연습" Command="{Binding StartWrongPracticeCommand}" IsEnabled="{Binding CanStartWrongPractice}" />
                     </HorizontalStackLayout>
+                    <HorizontalStackLayout Spacing="8">
+                        <CheckBox IsChecked="{Binding IncludeUnansweredInPractice}" />
+                        <Label Text="정답 없는 문항 포함" VerticalTextAlignment="Center" />
+                    </HorizontalStackLayout>
                     <Label Text="{Binding MaxPracticeCount, StringFormat='최대 {0}문항'}" TextColor="#475569" />
                     <Label Text="{Binding WrongQuestionCount, StringFormat='오답 {0}개'}" TextColor="#0F766E" />
 
