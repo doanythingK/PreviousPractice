@@ -6,8 +6,9 @@ namespace PreviousPractice.Infrastructure;
 
 public static class OcrQuestionSegmenter
 {
+    private const int FallbackLinesPerQuestion = 10;
     private static readonly Regex SingleLineHeaderRegex = new(
-        @"^\s*(?:(?:제|문항|문제)\s*)?(?<index>\d{1,3}|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|[가-하]|[A-Za-z])\s*(?:[.)\]])",
+        @"^\s*(?:[Qq]\s*)?(?:(?:제|문항|문제)\s*)?(?<index>\d{1,3}|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|[가-하]|[A-Za-z])\s*(?:[.)\]\-:：]|\s|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static IReadOnlyList<OcrQuestionCandidate> SplitByHeader(IReadOnlyList<OcrPageResult> pages)
@@ -86,7 +87,7 @@ public static class OcrQuestionSegmenter
 
         if (candidates.Count == 0)
         {
-            return Array.Empty<OcrQuestionCandidate>();
+            return SplitByHeuristic(lines);
         }
 
         for (var i = 0; i < candidates.Count; i++)
@@ -98,6 +99,43 @@ public static class OcrQuestionSegmenter
             }
 
             candidates[i] = candidates[i] with { EndPage = candidates[i + 1].StartPage };
+        }
+
+        return candidates;
+    }
+
+    private static IReadOnlyList<OcrQuestionCandidate> SplitByHeuristic(
+        IReadOnlyList<(int pageIndex, string line)> lines)
+    {
+        if (lines.Count == 0)
+        {
+            return Array.Empty<OcrQuestionCandidate>();
+        }
+
+        var candidates = new List<OcrQuestionCandidate>();
+        var index = 1;
+        var chunkSize = Math.Max(1, FallbackLinesPerQuestion);
+
+        for (var start = 0; start < lines.Count; start += chunkSize)
+        {
+            var end = Math.Min(start + chunkSize, lines.Count);
+            var chunk = lines.Skip(start).Take(end - start).ToArray();
+            if (chunk.Length == 0)
+            {
+                continue;
+            }
+
+            var preview = TrimToLength(string.Join(" ", chunk.Select(x => x.line)), 150);
+            candidates.Add(new OcrQuestionCandidate
+            {
+                Index = index,
+                Header = $"[추정] 문항 {index}",
+                StartPage = chunk[0].pageIndex,
+                EndPage = chunk[^1].pageIndex,
+                PreviewText = preview
+            });
+
+            index++;
         }
 
         return candidates;
