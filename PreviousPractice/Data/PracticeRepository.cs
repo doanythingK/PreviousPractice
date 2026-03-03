@@ -196,7 +196,12 @@ public sealed class PracticeRepository : IPracticeRepository
         }
     }
 
-    public async Task SaveImportedQuestionsAsync(string categoryId, string sourceFileName, IEnumerable<Question> questions, bool overwriteBySourceFile)
+    public async Task SaveImportedQuestionsAsync(
+        string categoryId,
+        string sourceFileName,
+        IEnumerable<Question> questions,
+        bool overwriteBySourceFile,
+        bool updateExistingCorrectAnswers = false)
     {
         var normalizedSourceFile = NormalizeSourceFileName(sourceFileName);
 
@@ -221,6 +226,11 @@ public sealed class PracticeRepository : IPracticeRepository
 
             foreach (var incoming in questions)
             {
+                if (incoming == null)
+                {
+                    continue;
+                }
+
                 var question = new Question
                 {
                     Index = incoming.Index,
@@ -234,19 +244,6 @@ public sealed class PracticeRepository : IPracticeRepository
                     CorrectAnswers = incoming.CorrectAnswers
                 };
 
-                if (!overwriteBySourceFile)
-                {
-                    var hasDuplicate = state.Questions.Any(x =>
-                        x.CategoryId == categoryId &&
-                        string.Equals(x.SourceFileName, normalizedSourceFile, StringComparison.OrdinalIgnoreCase) &&
-                        x.Index == question.Index);
-
-                    if (hasDuplicate)
-                    {
-                        continue;
-                    }
-                }
-
                 if (string.IsNullOrWhiteSpace(question.Prompt))
                 {
                     question.Prompt = $"문항 {question.Index}";
@@ -256,6 +253,28 @@ public sealed class PracticeRepository : IPracticeRepository
                     .Where(x => !string.IsNullOrWhiteSpace(x))
                     .Select(x => x.Trim())
                     .ToArray();
+
+                var existing = state.Questions.FirstOrDefault(x =>
+                    x.CategoryId == categoryId &&
+                    string.Equals(x.SourceFileName, normalizedSourceFile, StringComparison.OrdinalIgnoreCase) &&
+                    x.Index == question.Index);
+
+                if (!overwriteBySourceFile && existing != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(question.Prompt))
+                    {
+                        existing.Prompt = question.Prompt;
+                    }
+
+                    if (updateExistingCorrectAnswers && question.CorrectAnswers.Length > 0)
+                    {
+                        existing.CorrectAnswers = question.CorrectAnswers;
+                    }
+
+                    existing.Type = question.Type;
+                    existing.Choices = question.Choices;
+                    continue;
+                }
 
                 state.Questions.Add(question);
             }

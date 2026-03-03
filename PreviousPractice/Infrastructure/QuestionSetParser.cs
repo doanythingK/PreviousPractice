@@ -17,7 +17,7 @@ public static class QuestionSetParser
 
         if (string.IsNullOrWhiteSpace(answerMapText))
         {
-            return new AnswerMapParseResult(Array.Empty<Question>(), new[] { "정답 텍스트가 비어 있습니다." }, "정답 텍스트가 비어 있습니다.");
+            return new AnswerMapParseResult(Array.Empty<Question>(), Array.Empty<string>(), "정답 텍스트가 비어 있습니다.");
         }
 
         var pairs = answerMapText

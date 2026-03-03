@@ -75,7 +75,6 @@ public class MainViewModel : ViewModelBase
 
     public bool CanImportAnswerMap =>
         SelectedCategory != null &&
-        !string.IsNullOrWhiteSpace(AnswerMapText) &&
         !string.IsNullOrWhiteSpace(SelectedSourceFileName);
 
     public string AnswerMapText
@@ -374,14 +373,14 @@ public class MainViewModel : ViewModelBase
         PdfAnalysisSummary = BuildAnalysisSummary(analysis);
 
         var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText, SelectedQuestionType);
-        if (result.IsEmpty)
+        if (!analysis.HasQuestionCandidates && result.IsEmpty)
         {
-            Feedback = $"{analysis.Summary} / 정답 파일 파싱 실패: {result.Message}";
+            Feedback = $"{analysis.Summary} / 정답 파일/문항 후보가 없어 저장할 수 없습니다.";
             return;
         }
 
         var shouldOverwrite = OverwriteExisting;
-        if (!shouldOverwrite)
+        if (shouldOverwrite)
         {
             var existingCount = await repository.GetQuestionCountBySourceFileAsync(
                 SelectedCategory.Id,
@@ -403,39 +402,66 @@ public class MainViewModel : ViewModelBase
             .GroupBy(x => x.Index)
             .ToDictionary(x => x.Key, x => x.First());
 
-        var questions = result.Questions
+        var answerByIndex = result.Questions
+            .GroupBy(x => x.Index)
+            .ToDictionary(
+                x => x.Key,
+                x => x.OrderByDescending(q => q.CorrectAnswers.Length).First());
+
+        var sourceQuestionIndexes = candidateByIndex.Keys
+            .Concat(answerByIndex.Keys)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToArray();
+
+        var questions = sourceQuestionIndexes
             .Select(x =>
             {
-                x.CategoryId = SelectedCategory.Id;
-                x.SourceFileName = normalizedSourceFileName;
-                x.Type = SelectedQuestionType;
-
-                if (string.IsNullOrWhiteSpace(x.Prompt))
+                var question = new Question
                 {
-                    if (candidateByIndex.TryGetValue(x.Index, out var candidate) &&
-                        !string.IsNullOrWhiteSpace(candidate.PreviewText))
+                    CategoryId = SelectedCategory.Id,
+                    SourceFileName = normalizedSourceFileName,
+                    Index = x,
+                    Type = SelectedQuestionType,
+                    CorrectAnswers = answerByIndex.TryGetValue(x, out var parsedQuestion)
+                        ? parsedQuestion.CorrectAnswers
+                        : Array.Empty<string>(),
+                    Choices = Array.Empty<string>()
+                };
+
+                if (candidateByIndex.TryGetValue(x, out var candidate))
+                {
+                    if (!string.IsNullOrWhiteSpace(candidate.PreviewText))
                     {
-                        x.Prompt = $"{SelectedCategory.Name} - {candidate.Header} {candidate.PreviewText}";
-                    }
-                    else if (candidateByIndex.TryGetValue(x.Index, out candidate))
-                    {
-                        x.Prompt = $"{SelectedCategory.Name} - {candidate.Header}";
+                        question.Prompt = $"{SelectedCategory.Name} - {candidate.Header} {candidate.PreviewText}";
                     }
                     else
                     {
-                        x.Prompt = $"{SelectedCategory.Name} - 문항 {x.Index}";
+                        question.Prompt = $"{SelectedCategory.Name} - {candidate.Header}";
                     }
                 }
 
-                return x;
+                if (string.IsNullOrWhiteSpace(question.Prompt))
+                {
+                    question.Prompt = $"{SelectedCategory.Name} - 문항 {x}";
+                }
+
+                return question;
             })
             .ToArray();
+
+        if (questions.Length == 0)
+        {
+            Feedback = $"{analysis.Summary} / 저장할 문항 후보가 없습니다. 정답 맵에서 문항 번호를 먼저 넣어주세요.";
+            return;
+        }
 
         await repository.SaveImportedQuestionsAsync(
             SelectedCategory.Id,
             normalizedSourceFileName,
             questions,
-            overwriteBySourceFile: shouldOverwrite);
+            overwriteBySourceFile: shouldOverwrite,
+            updateExistingCorrectAnswers: true);
 
         var mismatchMessage = BuildCandidateMismatchMessage(analysis, result);
         var summary = result.HasErrors || !string.IsNullOrWhiteSpace(mismatchMessage)
@@ -721,18 +747,26 @@ public class MainViewModel : ViewModelBase
         }
 
         var question = CurrentQuestion;
-        var isCorrect = AnswerComparer.IsCorrect(question, UserAnswer);
-
-        if (isCorrect)
+        var hasCorrectAnswer = question.CorrectAnswers.Any(x => !string.IsNullOrWhiteSpace(x));
+        if (!hasCorrectAnswer)
         {
-            CorrectCount++;
-            await repository.RemoveWrongAsync(question.Id);
-            SessionFeedback = $"정답: {question.CorrectAnswerDisplay}";
+            SessionFeedback = "정답이 등록되지 않은 문항입니다. 나중에 정답을 매핑한 뒤 채점 가능합니다.";
         }
         else
         {
-            await repository.MarkWrongAsync(question.Id);
-            SessionFeedback = $"오답: 정답은 {question.CorrectAnswerDisplay} 입니다.";
+            var isCorrect = AnswerComparer.IsCorrect(question, UserAnswer);
+
+            if (isCorrect)
+            {
+                CorrectCount++;
+                await repository.RemoveWrongAsync(question.Id);
+                SessionFeedback = $"정답: {question.CorrectAnswerDisplay}";
+            }
+            else
+            {
+                await repository.MarkWrongAsync(question.Id);
+                SessionFeedback = $"오답: 정답은 {question.CorrectAnswerDisplay} 입니다.";
+            }
         }
 
         await ReloadWrongAsync();
@@ -1000,7 +1034,7 @@ public class MainViewModel : ViewModelBase
     {
         if (parseResult.Questions.Count() == 0)
         {
-            return "저장할 정답이 없습니다.";
+            return "정답이 없어 미채점 상태로 저장합니다.";
         }
 
         if (!analysis.HasQuestionCandidates)
