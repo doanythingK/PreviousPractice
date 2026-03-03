@@ -10,6 +10,10 @@ using Windows.Media.Ocr;
 using Windows.Storage;
 using Windows.Storage.Streams;
 #endif
+#if IOS || MACCATALYST
+using Foundation;
+using PDFKit;
+#endif
 
 namespace PreviousPractice.Services;
 
@@ -24,6 +28,8 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
     {
 #if WINDOWS
         return AnalyzePdfWithWindowsOcrAsync(pdfFilePath, cancellationToken);
+#elif IOS || MACCATALYST
+        return AnalyzePdfWithPdfKitAsync(pdfFilePath, cancellationToken);
 #else
         return AnalyzePdfWithCommandLineToolsAsync(pdfFilePath, cancellationToken);
 #endif
@@ -132,8 +138,8 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
         }
     }
 
-#else
-    private static async Task<PdfOcrResult> AnalyzePdfWithCommandLineToolsAsync(string pdfFilePath, CancellationToken cancellationToken = default)
+#elif IOS || MACCATALYST
+    private static async Task<PdfOcrResult> AnalyzePdfWithPdfKitAsync(string pdfFilePath, CancellationToken cancellationToken = default)
     {
         var sourceFileName = Path.GetFileName(pdfFilePath);
         if (string.IsNullOrWhiteSpace(pdfFilePath))
@@ -146,11 +152,67 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
             return PdfOcrResult.Fail(sourceFileName, "문항 PDF 파일을 찾을 수 없습니다.");
         }
 
-        if (OperatingSystem.IsIOS())
+        await Task.Yield();
+
+        try
         {
-            return PdfOcrResult.Fail(
-                sourceFileName,
-                "iOS는 현재 외부 CLI 기반 OCR 환경이 없어 PDF OCR 분석을 지원하지 않습니다.");
+            using var documentUrl = NSUrl.FromFilename(pdfFilePath);
+            using var pdfDocument = new PDFDocument(documentUrl);
+            if (pdfDocument == null || pdfDocument.PageCount <= 0)
+            {
+                return PdfOcrResult.Fail(sourceFileName, "PDF 문서가 비어 있거나 열 수 없습니다.");
+            }
+
+            var pages = new List<OcrPageResult>();
+            for (var i = 0; i < pdfDocument.PageCount; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var page = pdfDocument.GetPage(i);
+                if (page == null)
+                {
+                    continue;
+                }
+
+                var raw = NormalizeWhitespace(page.String);
+                var wordCount = string.IsNullOrWhiteSpace(raw)
+                    ? 0
+                    : raw.Split((char[])['\r', '\n', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
+
+                pages.Add(new OcrPageResult(i + 1, raw, wordCount, 0f));
+            }
+
+            if (pages.Count == 0 || !pages.Any(x => !string.IsNullOrWhiteSpace(x.Text)))
+            {
+                return PdfOcrResult.Fail(
+                    sourceFileName,
+                    "이 PDF는 텍스트 추출이 되지 않습니다. 현재 iOS/macOS는 이미지 OCR이 아니라 PDF 내장 텍스트 추출로만 분석됩니다.");
+            }
+
+            return PdfOcrResult.Ok(sourceFileName, pages);
+        }
+        catch (OperationCanceledException)
+        {
+            return PdfOcrResult.Fail(sourceFileName, "OCR 분석이 취소되었습니다.");
+        }
+        catch (Exception ex)
+        {
+            return PdfOcrResult.Fail(sourceFileName, $"PDF 텍스트 추출 중 오류: {ex.Message}");
+        }
+    }
+
+#else
+    private static async Task<PdfOcrResult> AnalyzePdfWithCommandLineToolsAsync(string pdfFilePath, CancellationToken cancellationToken = default)
+    {
+        var sourceFileName = Path.GetFileName(pdfFilePath);
+        if (string.IsNullOrWhiteSpace(pdfFilePath))
+        {
+            return PdfOcrResult.Fail("unknown.pdf", "문항 PDF 경로가 비어 있습니다.");
+        }
+
+        if (!File.Exists(pdfFilePath))
+        {
+            return PdfOcrResult.Fail(sourceFileName, "문항 PDF 파일을 찾을 수 없습니다.");
         }
 
         var pdftoppmPath = ResolveCommandPath("pdftoppm");
