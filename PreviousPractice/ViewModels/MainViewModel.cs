@@ -7,6 +7,7 @@ using PreviousPractice.Infrastructure;
 using PreviousPractice.Models;
 using PreviousPractice.Services;
 using Microsoft.Maui.Storage;
+using Microsoft.Maui.Graphics;
 
 namespace PreviousPractice.ViewModels;
 
@@ -23,10 +24,13 @@ public class MainViewModel : ViewModelBase
     private string answerMapText = string.Empty;
     private string pdfAnalysisSummary = string.Empty;
     private string pdfAnalysisStatus = string.Empty;
+    private Color pdfAnalysisStatusColor = Color.FromArgb("#334155");
     private double pdfAnalysisProgress;
     private int pdfAnalysisTotalPages;
     private int pdfAnalysisProcessedPages;
+    private double pdfAnalysisPagesPerSecond;
     private bool isPdfAnalysisInProgress;
+    private DateTimeOffset pdfAnalysisStartAt;
     private string practiceCountText = "1";
     private string feedback = string.Empty;
     private string sessionFeedback = string.Empty;
@@ -62,6 +66,12 @@ public class MainViewModel : ViewModelBase
         private set => SetProperty(ref pdfAnalysisStatus, value);
     }
 
+    public Color PdfAnalysisStatusColor
+    {
+        get => pdfAnalysisStatusColor;
+        private set => SetProperty(ref pdfAnalysisStatusColor, value);
+    }
+
     public bool IsPdfAnalysisInProgress
     {
         get => isPdfAnalysisInProgress;
@@ -90,6 +100,23 @@ public class MainViewModel : ViewModelBase
 
     public string PdfAnalysisProgressText =>
         $"{(int)(PdfAnalysisProgressValue * 100)}% ({pdfAnalysisProcessedPages}/{(pdfAnalysisTotalPages <= 0 ? \"?\" : pdfAnalysisTotalPages.ToString())})";
+
+    public double PdfAnalysisPagesPerSecond
+    {
+        get => pdfAnalysisPagesPerSecond;
+        private set
+        {
+            if (SetProperty(ref pdfAnalysisPagesPerSecond, value))
+            {
+                OnPropertyChanged(nameof(PdfAnalysisSpeedText));
+            }
+        }
+    }
+
+    public string PdfAnalysisSpeedText =>
+        pdfAnalysisStartAt == default
+            ? "처리 속도: 0.0 p/s"
+            : $"처리 속도: {PdfAnalysisPagesPerSecond:0.0} p/s";
 
     public bool ShowPdfAnalysisProgress => IsPdfAnalysisInProgress || pdfAnalysisProcessedPages > 0;
 
@@ -425,8 +452,10 @@ public class MainViewModel : ViewModelBase
 
         ClearPdfAnalysisState();
         IsPdfAnalysisInProgress = true;
+        pdfAnalysisStartAt = DateTimeOffset.UtcNow;
         PdfAnalysisProgressValue = 0d;
         PdfAnalysisStatus = "문항 PDF OCR 분석을 시작합니다.";
+        PdfAnalysisStatusColor = Color.FromArgb("#0EA5E9");
         Feedback = PdfAnalysisStatus;
 
         try
@@ -437,6 +466,7 @@ public class MainViewModel : ViewModelBase
             {
                 PdfAnalysisSummary = $"문항 분석 실패: {analysis.Message}";
                 PdfAnalysisStatus = "문항 분석이 실패했습니다. 상태를 확인해 주세요.";
+                PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
                 Feedback = PdfAnalysisSummary;
                 return;
             }
@@ -449,6 +479,7 @@ public class MainViewModel : ViewModelBase
             await SavePdfAnalysisAsync(normalizedSourceFileName, analysis);
             PdfAnalysisSummary = BuildAnalysisSummary(analysis);
             PdfAnalysisStatus = "문항 분석이 완료되었습니다.";
+            PdfAnalysisStatusColor = Color.FromArgb("#16A34A");
 
             var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText, SelectedQuestionType);
             if (!analysis.HasQuestionCandidates && result.IsEmpty)
@@ -564,6 +595,7 @@ public class MainViewModel : ViewModelBase
             Feedback = $"문항 분석 중 오류가 발생했습니다: {ex.Message}";
             PdfAnalysisSummary = $"문항 분석 실패: {ex.Message}";
             PdfAnalysisStatus = "문항 분석 중 오류가 발생했습니다.";
+            PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
         }
         finally
         {
@@ -577,6 +609,9 @@ public class MainViewModel : ViewModelBase
         pdfAnalysisTotalPages = 0;
         PdfAnalysisProgressValue = 0d;
         PdfAnalysisStatus = string.Empty;
+        PdfAnalysisStatusColor = Color.FromArgb("#334155");
+        PdfAnalysisPagesPerSecond = 0d;
+        pdfAnalysisStartAt = DateTimeOffset.UtcNow;
         OnPropertyChanged(nameof(ShowPdfAnalysisProgress));
         OnPropertyChanged(nameof(PdfAnalysisProgressText));
     }
@@ -587,6 +622,20 @@ public class MainViewModel : ViewModelBase
         pdfAnalysisTotalPages = Math.Max(0, progress.TotalPages);
 
         PdfAnalysisStatus = progress.Message;
+        if (IsPdfAnalysisInProgress)
+        {
+            PdfAnalysisStatusColor = Color.FromArgb("#0EA5E9");
+        }
+
+        if (pdfAnalysisStartAt != default && pdfAnalysisProcessedPages > 0)
+        {
+            var elapsed = Math.Max(0.000_001, (DateTimeOffset.UtcNow - pdfAnalysisStartAt).TotalSeconds);
+            PdfAnalysisPagesPerSecond = pdfAnalysisProcessedPages / elapsed;
+        }
+        else
+        {
+            PdfAnalysisPagesPerSecond = 0d;
+        }
 
         var progressValue = progress.TotalPages <= 0
             ? 0d

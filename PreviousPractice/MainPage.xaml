@@ -69,9 +69,10 @@
                     <Frame Padding="10" BorderColor="#94A3B8" IsVisible="{Binding ShowPdfAnalysisProgress}">
                         <VerticalStackLayout Spacing="4">
                             <Label Text="문항 PDF 분석 진행" FontAttributes="Bold" />
-                            <Label Text="{Binding PdfAnalysisStatus}" TextColor="#334155" LineBreakMode="WordWrap" />
+                            <Label Text="{Binding PdfAnalysisStatus}" TextColor="{Binding PdfAnalysisStatusColor}" LineBreakMode="WordWrap" />
                             <ProgressBar Progress="{Binding PdfAnalysisProgressValue}" ProgressColor="#0EA5E9" />
                             <Label Text="{Binding PdfAnalysisProgressText}" HorizontalTextAlignment="End" FontSize="12" TextColor="#334155" />
+                            <Label Text="{Binding PdfAnalysisSpeedText}" HorizontalTextAlignment="End" FontSize="12" TextColor="#334155" />
                         </VerticalStackLayout>
                     </Frame>
 
