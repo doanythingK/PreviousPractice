@@ -3,7 +3,7 @@
 이 프로젝트는 PDF 기출문제와 정답 파일을 기반으로 문제를 분해해 연습할 수 있는 **오프라인 단일 사용자 데스크톱/모바일 학습 앱**을 만드는 것을 목표로 합니다.
 
 - 목적
-- C# MAUI 기반으로 Windows, Android(iOS/Mac 예정)에서 동작하는 기출문제 연습 앱을 구현
+- C# MAUI 기반으로 Windows, Android, iOS, Mac에서 동작하도록 설계된 기출문제 연습 앱을 구현
 - PDF와 정답 텍스트를 업로드해 문제를 분해 저장
 - 카테고리별로 관리하고 랜덤 출제로 반복 학습
 - 오답 문제 중심 복습 흐름을 제공
@@ -15,7 +15,8 @@
 - 업로드/분석(현재 OCR 분석 반영)
   - 문항 PDF를 앱의 로컬 소스 폴더에 등록
   - 등록된 PDF 목록에서 문항 파일명 선택
-  - `문항 반영` 실행 시 Windows에서 PDF OCR 분석을 먼저 수행해 결과를 저장
+  - `문항 반영` 실행 시 플랫폼 공통 OCR 파이프라인으로 PDF 분석을 수행해 결과를 저장
+  - OCR은 `pdftoppm` 및 `tesseract` 실행 파일을 필요로 하며, 해당 의존성이 없으면 분석 불가 메시지를 표시
   - 정답맵 텍스트(`번호:정답`) 업로드/불러오기
   - 정답맵 파싱 규칙: `번호:정답1|정답2`(객관식 다정답)
   - 문항 분할(문항 번호 추출)은 기출별 패턴 미확정으로 향후 설계
@@ -35,7 +36,7 @@
 2. MAUI 워크로드가 설치된 환경에서 프로젝트 복원  
    - `dotnet restore PreviousPractice/PreviousPractice.csproj`
 3. 실행(예시)  
-   - `dotnet build PreviousPractice/PreviousPractice.csproj -t:Run -f net8.0-windows10.0.19041.0`
+   - `dotnet build PreviousPractice/PreviousPractice.csproj -t:Run -f net9.0-windows10.0.19041.0`
 
 ## 현재 실행 제한
 - 현재 작업 환경에는 MAUI 템플릿/워크로드가 없어 프로젝트 골격 생성 위주로 구성되었으며,
