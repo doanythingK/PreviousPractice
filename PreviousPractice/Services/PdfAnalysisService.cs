@@ -135,7 +135,9 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 var recognizedText = NormalizeWhitespace(ocrResult.Text);
                 var wordCount = string.IsNullOrWhiteSpace(recognizedText)
                     ? 0
-                    : recognizedText.Split((char[])['\r', '\n', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
+                    : recognizedText.Split(
+                        new[] { '\r', '\n', ' ' },
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
                 var averageConfidence = wordCount == 0 ? 0f : 100f;
 
                 pages.Add(new OcrPageResult(
@@ -216,7 +218,9 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 var raw = NormalizeWhitespace(page.String);
                 var wordCount = string.IsNullOrWhiteSpace(raw)
                     ? 0
-                    : raw.Split((char[])['\r', '\n', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
+                    : raw.Split(
+                        new[] { '\r', '\n', ' ' },
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
 
                 pages.Add(new OcrPageResult(i + 1, raw, wordCount, 0f));
             }
@@ -354,7 +358,9 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 var raw = NormalizeWhitespace(ocrResult.StdOut);
                 var wordCount = string.IsNullOrWhiteSpace(raw)
                     ? 0
-                    : raw.Split((char[])['\r', '\n', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
+                    : raw.Split(
+                        new[] { '\r', '\n', ' ' },
+                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
 
                 pages.Add(new OcrPageResult(i + 1, raw, wordCount, 0f));
             }

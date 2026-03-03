@@ -99,7 +99,8 @@ public class MainViewModel : ViewModelBase
     }
 
     public string PdfAnalysisProgressText =>
-        $"{(int)(PdfAnalysisProgressValue * 100)}% ({pdfAnalysisProcessedPages}/{(pdfAnalysisTotalPages <= 0 ? \"?\" : pdfAnalysisTotalPages.ToString())})";
+        $"{(int)(PdfAnalysisProgressValue * 100)}% ({pdfAnalysisProcessedPages}/" +
+        $"{(pdfAnalysisTotalPages <= 0 ? "?" : pdfAnalysisTotalPages.ToString())})";
 
     public double PdfAnalysisPagesPerSecond
     {
