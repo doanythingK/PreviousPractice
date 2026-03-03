@@ -241,10 +241,6 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public QuestionType SelectedQuestionType { get; set; } = QuestionType.MultipleChoice;
-
-    public Array QuestionTypes => Enum.GetValues<QuestionType>();
-
     public bool IncludeUnansweredInPractice
     {
         get => includeUnansweredInPractice;
@@ -482,10 +478,10 @@ public class MainViewModel : ViewModelBase
             PdfAnalysisStatus = "문항 분석이 완료되었습니다.";
             PdfAnalysisStatusColor = Color.FromArgb("#16A34A");
 
-            var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText, SelectedQuestionType);
+            var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText);
             if (!analysis.HasQuestionCandidates && result.IsEmpty)
             {
-                Feedback = $"{analysis.Summary} / 정답 파일/문항 후보가 없어 저장할 수 없습니다.";
+                Feedback = $"{analysis.Summary} / 문항 후보가 없어 저장할 수 없습니다.";
                 return;
             }
 
@@ -527,13 +523,16 @@ public class MainViewModel : ViewModelBase
             var questions = sourceQuestionIndexes
                 .Select(x =>
                 {
+                    var hasAnswer = answerByIndex.TryGetValue(x, out var parsedQuestion);
                     var question = new Question
                     {
                         CategoryId = SelectedCategory.Id,
                         SourceFileName = normalizedSourceFileName,
                         Index = x,
-                        Type = SelectedQuestionType,
-                        CorrectAnswers = answerByIndex.TryGetValue(x, out var parsedQuestion)
+                        Type = hasAnswer
+                            ? parsedQuestion.Type
+                            : QuestionType.MultipleChoice,
+                        CorrectAnswers = hasAnswer
                             ? parsedQuestion.CorrectAnswers
                             : Array.Empty<string>(),
                         Choices = Array.Empty<string>()

@@ -43,8 +43,6 @@
                     <Editor HeightRequest="120" Placeholder="예: 1:3|4,2:정답" Text="{Binding AnswerMapText}" />
                     <Button Text="정답 파일 불러오기" Command="{Binding LoadAnswerFileCommand}" />
                     <HorizontalStackLayout Spacing="12">
-                        <Label Text="문항형식" VerticalTextAlignment="Center" />
-                        <Picker WidthRequest="160" SelectedItem="{Binding SelectedQuestionType}" ItemsSource="{Binding QuestionTypes}" />
                         <Label Text="동일 파일명 덮어쓰기" VerticalTextAlignment="Center" />
                         <Switch IsToggled="{Binding OverwriteExisting}" />
                     </HorizontalStackLayout>

@@ -10,7 +10,7 @@ public sealed record AnswerMapParseResult(IEnumerable<Question> Questions, IRead
 
 public static class QuestionSetParser
 {
-    public static AnswerMapParseResult ParseAnswerMapWithDetails(string answerMapText, QuestionType defaultType = QuestionType.MultipleChoice)
+    public static AnswerMapParseResult ParseAnswerMapWithDetails(string answerMapText)
     {
         var parsedByIndex = new Dictionary<int, Question>();
         var errors = new List<string>();
@@ -27,11 +27,11 @@ public static class QuestionSetParser
         var hasExplicitMapping = pairs.Any(x => x.Contains(':', StringComparison.Ordinal));
         if (hasExplicitMapping)
         {
-            ParseAsExplicitMapping(pairs, defaultType, parsedByIndex, errors);
+            ParseAsExplicitMapping(pairs, parsedByIndex, errors);
         }
         else
         {
-            ParseAsAnswerList(pairs, defaultType, parsedByIndex);
+            ParseAsAnswerList(pairs, parsedByIndex);
         }
 
         if (parsedByIndex.Count == 0)
@@ -48,7 +48,6 @@ public static class QuestionSetParser
 
     private static void ParseAsExplicitMapping(
         IEnumerable<string> pairs,
-        QuestionType defaultType,
         Dictionary<int, Question> parsedByIndex,
         IList<string> errors)
     {
@@ -69,6 +68,7 @@ public static class QuestionSetParser
 
             var answers = splitted[1]
                 .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x.Trim())
                 .ToArray();
 
@@ -80,7 +80,7 @@ public static class QuestionSetParser
             var question = new Question
             {
                 Index = idx,
-                Type = defaultType,
+                Type = InferQuestionType(answers),
                 CorrectAnswers = answers,
                 Prompt = $"문항 {idx}",
                 SourceFileName = string.Empty
@@ -97,7 +97,6 @@ public static class QuestionSetParser
 
     private static void ParseAsAnswerList(
         IEnumerable<string> answers,
-        QuestionType defaultType,
         Dictionary<int, Question> parsedByIndex)
     {
         var index = 0;
@@ -107,7 +106,7 @@ public static class QuestionSetParser
 
             var token = rawAnswer?.Trim() ?? string.Empty;
             var splitAnswers = token
-                .Split('|', StringSplitOptions.TrimEntries)
+                .Split('|', StringSplitOptions.None)
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => x.Trim())
                 .ToArray();
@@ -115,20 +114,36 @@ public static class QuestionSetParser
             var question = new Question
             {
                 Index = index,
-                Type = defaultType,
+                Type = InferQuestionType(splitAnswers),
                 CorrectAnswers = splitAnswers,
                 Prompt = $"문항 {index}",
                 SourceFileName = string.Empty
             };
 
             parsedByIndex[index] = question;
-
         }
     }
 
-    public static (Question[] Questions, string Message) ParseAnswerMap(string answerMapText, QuestionType defaultType = QuestionType.MultipleChoice)
+    public static (Question[] Questions, string Message) ParseAnswerMap(string answerMapText)
     {
-        var result = ParseAnswerMapWithDetails(answerMapText, defaultType);
+        var result = ParseAnswerMapWithDetails(answerMapText);
         return (result.Questions.ToArray(), result.Message);
+    }
+
+    private static QuestionType InferQuestionType(string[] answers)
+    {
+        if (answers.Length == 0)
+        {
+            return QuestionType.MultipleChoice;
+        }
+
+        return answers.All(IsIntAnswer)
+            ? QuestionType.MultipleChoice
+            : QuestionType.Subjective;
+    }
+
+    private static bool IsIntAnswer(string value)
+    {
+        return int.TryParse(value.Trim(), out _);
     }
 }
