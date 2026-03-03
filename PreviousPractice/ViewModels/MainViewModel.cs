@@ -666,7 +666,7 @@ public class MainViewModel : ViewModelBase
                 return;
             }
 
-            await using var stream = await file.OpenReadAsync();
+            using var stream = await file.OpenReadAsync();
             using var reader = new StreamReader(stream);
             var content = await reader.ReadToEndAsync();
             AnswerMapText = content;
@@ -760,8 +760,8 @@ public class MainViewModel : ViewModelBase
                 }
             }
 
-            await using var sourceStream = await file.OpenReadAsync();
-            await using var destinationStream = File.Create(destinationPath);
+            using var sourceStream = await file.OpenReadAsync();
+            using var destinationStream = File.Create(destinationPath);
             await sourceStream.CopyToAsync(destinationStream);
 
             Feedback = $"문항 파일을 등록했습니다: {sourceFileName}";
