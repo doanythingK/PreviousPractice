@@ -20,19 +20,27 @@ namespace PreviousPractice.Services;
 
 public interface IPdfAnalysisService
 {
-    Task<PdfOcrResult> AnalyzePdfAsync(string pdfFilePath, CancellationToken cancellationToken = default);
+    Task<PdfOcrResult> AnalyzePdfAsync(
+        string pdfFilePath,
+        IProgress<PdfAnalysisProgress>? progress = null,
+        CancellationToken cancellationToken = default);
 }
+
+public sealed record PdfAnalysisProgress(int ProcessedPages, int TotalPages, string Message);
 
 public sealed class PdfAnalysisService : IPdfAnalysisService
 {
-    public Task<PdfOcrResult> AnalyzePdfAsync(string pdfFilePath, CancellationToken cancellationToken = default)
+    public Task<PdfOcrResult> AnalyzePdfAsync(
+        string pdfFilePath,
+        IProgress<PdfAnalysisProgress>? progress = null,
+        CancellationToken cancellationToken = default)
     {
 #if WINDOWS
-        return AnalyzePdfWithWindowsOcrAsync(pdfFilePath, cancellationToken);
+        return AnalyzePdfWithWindowsOcrAsync(pdfFilePath, progress, cancellationToken);
 #elif IOS || MACCATALYST
-        return AnalyzePdfWithPdfKitAsync(pdfFilePath, cancellationToken);
+        return AnalyzePdfWithPdfKitAsync(pdfFilePath, progress, cancellationToken);
 #else
-        return AnalyzePdfWithCommandLineToolsAsync(pdfFilePath, cancellationToken);
+        return AnalyzePdfWithCommandLineToolsAsync(pdfFilePath, progress, cancellationToken);
 #endif
     }
 
@@ -61,7 +69,10 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
     }
 
 #if WINDOWS
-    private static async Task<PdfOcrResult> AnalyzePdfWithWindowsOcrAsync(string pdfFilePath, CancellationToken cancellationToken = default)
+    private static async Task<PdfOcrResult> AnalyzePdfWithWindowsOcrAsync(
+        string pdfFilePath,
+        IProgress<PdfAnalysisProgress>? progress,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(pdfFilePath))
         {
@@ -91,9 +102,18 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 return PdfOcrResult.Fail(sourceFileName, "페이지가 없는 PDF 파일입니다.");
             }
 
+            var totalPages = (int)pdfDocument.PageCount;
+            ReportProgress(progress, 0, totalPages, "PDF 렌더링/페이지 읽기 시작");
+
             var pages = new List<OcrPageResult>();
             for (uint i = 0; i < pdfDocument.PageCount; i++)
             {
+                ReportProgress(
+                    progress,
+                    (int)i,
+                    totalPages,
+                    $"페이지 {i + 1}/{totalPages} OCR 분석 중");
+
                 cancellationToken.ThrowIfCancellationRequested();
 
                 using var pdfPage = pdfDocument.GetPage(i);
@@ -125,6 +145,8 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                     averageConfidence));
             }
 
+            ReportProgress(progress, totalPages, totalPages, "OCR 분석 완료");
+
             if (pages.Count == 0 || !pages.Any(x => !string.IsNullOrWhiteSpace(x.Text)))
             {
                 return PdfOcrResult.Fail(sourceFileName, "이미지에서 텍스트를 추출하지 못했습니다.");
@@ -144,7 +166,10 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
     }
 
 #elif IOS || MACCATALYST
-    private static async Task<PdfOcrResult> AnalyzePdfWithPdfKitAsync(string pdfFilePath, CancellationToken cancellationToken = default)
+    private static async Task<PdfOcrResult> AnalyzePdfWithPdfKitAsync(
+        string pdfFilePath,
+        IProgress<PdfAnalysisProgress>? progress,
+        CancellationToken cancellationToken = default)
     {
         var sourceFileName = Path.GetFileName(pdfFilePath);
         if (string.IsNullOrWhiteSpace(pdfFilePath))
@@ -168,9 +193,18 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 return PdfOcrResult.Fail(sourceFileName, "PDF 문서가 비어 있거나 열 수 없습니다.");
             }
 
+            var totalPages = pdfDocument.PageCount;
+            ReportProgress(progress, 0, totalPages, "PDF 텍스트 추출 시작");
+
             var pages = new List<OcrPageResult>();
             for (var i = 0; i < pdfDocument.PageCount; i++)
             {
+                ReportProgress(
+                    progress,
+                    i,
+                    totalPages,
+                    $"페이지 {i + 1}/{totalPages} 텍스트 추출 중");
+
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var page = pdfDocument.GetPage(i);
@@ -186,6 +220,8 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
 
                 pages.Add(new OcrPageResult(i + 1, raw, wordCount, 0f));
             }
+
+            ReportProgress(progress, totalPages, totalPages, "텍스트 추출 완료");
 
             if (pages.Count == 0 || !pages.Any(x => !string.IsNullOrWhiteSpace(x.Text)))
             {
@@ -208,7 +244,10 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
     }
 
 #else
-    private static async Task<PdfOcrResult> AnalyzePdfWithCommandLineToolsAsync(string pdfFilePath, CancellationToken cancellationToken = default)
+    private static async Task<PdfOcrResult> AnalyzePdfWithCommandLineToolsAsync(
+        string pdfFilePath,
+        IProgress<PdfAnalysisProgress>? progress,
+        CancellationToken cancellationToken = default)
     {
         var sourceFileName = Path.GetFileName(pdfFilePath);
         if (string.IsNullOrWhiteSpace(pdfFilePath))
@@ -242,11 +281,12 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                     $"{platformName}에서 PDF OCR을 실행하려면 pdftoppm, tesseract가 앱 번들/패키지 경로에 필요합니다. 누락: {string.Join(", ", missingTools)}");
             }
 
-            return PdfOcrResult.Fail(
-                sourceFileName,
-                $"필요한 OCR 도구를 찾을 수 없습니다. 누락: {string.Join(", ", missingTools)}");
+                return PdfOcrResult.Fail(
+                    sourceFileName,
+                    $"필요한 OCR 도구를 찾을 수 없습니다. 누락: {string.Join(", ", missingTools)}");
         }
 
+        ReportProgress(progress, 0, 0, "pdftoppm/tesseract 확인 완료");
         var workDirectory = Path.Combine(Path.GetTempPath(), "PreviousPracticePdfOcr", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDirectory);
 
@@ -273,9 +313,18 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 return PdfOcrResult.Fail(sourceFileName, "PDF 페이지를 이미지로 변환하지 못했습니다.");
             }
 
+            var totalPages = images.Length;
+            ReportProgress(progress, 0, totalPages, "이미지 생성 완료. OCR 실행 중");
+
             var pages = new List<OcrPageResult>();
             for (var i = 0; i < images.Length; i++)
             {
+                ReportProgress(
+                    progress,
+                    i,
+                    totalPages,
+                    $"이미지 {i + 1}/{totalPages} OCR 처리 중");
+
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var imagePath = images[i];
@@ -309,6 +358,8 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
 
                 pages.Add(new OcrPageResult(i + 1, raw, wordCount, 0f));
             }
+
+            ReportProgress(progress, totalPages, totalPages, "OCR 분석 완료");
 
             if (!pages.Any(x => !string.IsNullOrWhiteSpace(x.Text)))
             {
@@ -391,6 +442,23 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
         }
 
         return null;
+    }
+
+    private static void ReportProgress(
+        IProgress<PdfAnalysisProgress>? progress,
+        int processedPages,
+        int totalPages,
+        string message)
+    {
+        if (progress == null)
+        {
+            return;
+        }
+
+        progress.Report(new PdfAnalysisProgress(
+            Math.Max(0, processedPages),
+            Math.Max(0, totalPages),
+            string.IsNullOrWhiteSpace(message) ? string.Empty : message.Trim()));
     }
 
     private static async Task<CommandExecutionResult> RunCommandAsync(
