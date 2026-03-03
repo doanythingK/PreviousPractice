@@ -354,8 +354,8 @@ public class MainViewModel : ViewModelBase
         }
 
         var normalizedSourceFileName = NormalizeSourceFileName(SelectedSourceFileName);
-        var sourceFilePath = Path.Combine(sourceFileDirectory, normalizedSourceFileName);
-        if (!File.Exists(sourceFilePath))
+        var sourceFilePath = ResolveSourceFilePath(normalizedSourceFileName);
+        if (string.IsNullOrWhiteSpace(sourceFilePath) || !File.Exists(sourceFilePath))
         {
             Feedback = $"문항 파일을 찾을 수 없습니다: {normalizedSourceFileName}";
             return;
@@ -371,7 +371,7 @@ public class MainViewModel : ViewModelBase
         }
 
         await SavePdfAnalysisAsync(normalizedSourceFileName, analysis);
-        PdfAnalysisSummary = $"{analysis.Summary}\n미리보기:\n{analysis.Preview}";
+        PdfAnalysisSummary = BuildAnalysisSummary(analysis);
 
         var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText, SelectedQuestionType);
         if (result.IsEmpty)
@@ -398,15 +398,35 @@ public class MainViewModel : ViewModelBase
             }
         }
 
+        var candidateByIndex = analysis.QuestionCandidates
+            .Where(x => x.Index > 0)
+            .GroupBy(x => x.Index)
+            .ToDictionary(x => x.Key, x => x.First());
+
         var questions = result.Questions
             .Select(x =>
             {
                 x.CategoryId = SelectedCategory.Id;
                 x.SourceFileName = normalizedSourceFileName;
                 x.Type = SelectedQuestionType;
-                x.Prompt = string.IsNullOrWhiteSpace(x.Prompt)
-                    ? $"{SelectedCategory.Name} - 문항 {x.Index}"
-                    : x.Prompt;
+
+                if (string.IsNullOrWhiteSpace(x.Prompt))
+                {
+                    if (candidateByIndex.TryGetValue(x.Index, out var candidate) &&
+                        !string.IsNullOrWhiteSpace(candidate.PreviewText))
+                    {
+                        x.Prompt = $"{SelectedCategory.Name} - {candidate.Header} {candidate.PreviewText}";
+                    }
+                    else if (candidateByIndex.TryGetValue(x.Index, out candidate))
+                    {
+                        x.Prompt = $"{SelectedCategory.Name} - {candidate.Header}";
+                    }
+                    else
+                    {
+                        x.Prompt = $"{SelectedCategory.Name} - 문항 {x.Index}";
+                    }
+                }
+
                 return x;
             })
             .ToArray();
@@ -417,8 +437,11 @@ public class MainViewModel : ViewModelBase
             questions,
             overwriteBySourceFile: shouldOverwrite);
 
-        var summary = result.HasErrors
-            ? $"{questions.Length}개 저장(일부 파싱 오류: {string.Join(", ", result.Errors)})"
+        var mismatchMessage = BuildCandidateMismatchMessage(analysis, result);
+        var summary = result.HasErrors || !string.IsNullOrWhiteSpace(mismatchMessage)
+            ? $"{questions.Length}개 저장"
+              + (!result.HasErrors ? string.Empty : $"(일부 파싱 오류: {string.Join(", ", result.Errors)})")
+              + (string.IsNullOrWhiteSpace(mismatchMessage) ? string.Empty : $" / {mismatchMessage}")
             : $"{questions.Length}개 저장 완료";
 
         Feedback = $"{analysis.Summary} / {summary}";
@@ -474,11 +497,13 @@ public class MainViewModel : ViewModelBase
         try
         {
             Directory.CreateDirectory(sourceFileDirectory);
-            var files = Directory.EnumerateFiles(sourceFileDirectory)
+            var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var files = GetSourceFileSearchDirectories()
+                .Where(Directory.Exists)
+                .SelectMany(directory => Directory.EnumerateFiles(directory))
                 .Where(path => string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase))
                 .Select(Path.GetFileName)
-                .Where(name => !string.IsNullOrWhiteSpace(name))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Where(name => !string.IsNullOrWhiteSpace(name) && seenFiles.Add(name!))
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -909,6 +934,42 @@ public class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanDeleteSourceFile));
     }
 
+    private string? ResolveSourceFilePath(string sourceFileName)
+    {
+        if (string.IsNullOrWhiteSpace(sourceFileName))
+        {
+            return null;
+        }
+
+        return GetSourceFileSearchDirectories()
+            .Where(Directory.Exists)
+            .Select(directory => Path.Combine(directory, sourceFileName))
+            .FirstOrDefault(File.Exists);
+    }
+
+    private IEnumerable<string> GetSourceFileSearchDirectories()
+    {
+        var directories = new List<string> { sourceFileDirectory };
+
+        var currentDir = Directory.GetCurrentDirectory();
+        if (!string.IsNullOrWhiteSpace(currentDir))
+        {
+            directories.Add(currentDir);
+            directories.Add(Path.Combine(currentDir, "src"));
+        }
+
+        var appDir = AppContext.BaseDirectory;
+        if (!string.IsNullOrWhiteSpace(appDir))
+        {
+            directories.Add(appDir);
+            directories.Add(Path.Combine(appDir, "src"));
+            var projectRootCandidate = Path.GetFullPath(Path.Combine(appDir, "..", "..", "..", "..", ".."));
+            directories.Add(Path.Combine(projectRootCandidate, "src"));
+        }
+
+        return directories.Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
     private void UpdatePracticeState()
     {
         OnPropertyChanged(nameof(CanStartPractice));
@@ -917,6 +978,50 @@ public class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasSelectedCategory));
         OnPropertyChanged(nameof(CanDeleteCategory));
         OnPropertyChanged(nameof(CanDeleteSourceFile));
+    }
+
+    private static string BuildAnalysisSummary(PdfOcrResult analysis)
+    {
+        var baseSummary = $"{analysis.Summary}\n미리보기:\n{analysis.Preview}";
+        if (!analysis.HasQuestionCandidates)
+        {
+            return baseSummary + "\n현재 OCR 텍스트에서 문항 번호 헤더 후보를 찾지 못했습니다.";
+        }
+
+        var topCandidates = analysis.QuestionCandidates
+            .Take(10)
+            .Select(x => $"{x.Index}:{x.Header}")
+            .ToArray();
+
+        return baseSummary + $"\n분할 후보(최대 10개): {string.Join(", ", topCandidates)}";
+    }
+
+    private static string BuildCandidateMismatchMessage(PdfOcrResult analysis, AnswerMapParseResult parseResult)
+    {
+        if (parseResult.Questions.Count() == 0)
+        {
+            return "저장할 정답이 없습니다.";
+        }
+
+        if (!analysis.HasQuestionCandidates)
+        {
+            return "문항 분할 후보가 없어 수량 비교를 생략했습니다.";
+        }
+
+        var expected = analysis.DetectedQuestionCount;
+        var parsed = parseResult.Questions.Count();
+
+        if (parsed == expected)
+        {
+            return string.Empty;
+        }
+
+        if (parsed > expected)
+        {
+            return $"정답 항목 수({parsed}개)가 추정 문항 수({expected}개)보다 많습니다. 중복/헤더 미검출 항목 확인이 필요합니다.";
+        }
+
+        return $"정답 항목 수({parsed}개)가 추정 문항 수({expected}개)보다 적습니다. 누락된 문항이 있을 수 있습니다.";
     }
 
     private static string NormalizeSourceFileName(string sourceFileName)

@@ -2,6 +2,7 @@ using System.IO;
 using System.Diagnostics;
 using System.Text;
 using PreviousPractice.Models;
+using PreviousPractice.Infrastructure;
 
 #if WINDOWS
 using Windows.Data.Pdf;
@@ -126,7 +127,8 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 return PdfOcrResult.Fail(sourceFileName, "이미지에서 텍스트를 추출하지 못했습니다.");
             }
 
-            return PdfOcrResult.Ok(sourceFileName, pages);
+            var candidates = OcrQuestionSegmenter.SplitByHeader(pages);
+            return PdfOcrResult.Ok(sourceFileName, pages, candidates);
         }
         catch (OperationCanceledException)
         {
@@ -189,7 +191,8 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                     "이 PDF는 텍스트 추출이 되지 않습니다. 현재 iOS/macOS는 이미지 OCR이 아니라 PDF 내장 텍스트 추출로만 분석됩니다.");
             }
 
-            return PdfOcrResult.Ok(sourceFileName, pages);
+            var candidates = OcrQuestionSegmenter.SplitByHeader(pages);
+            return PdfOcrResult.Ok(sourceFileName, pages, candidates);
         }
         catch (OperationCanceledException)
         {
@@ -309,7 +312,8 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 return PdfOcrResult.Fail(sourceFileName, "이미지에서 텍스트를 추출하지 못했습니다.");
             }
 
-            return PdfOcrResult.Ok(sourceFileName, pages);
+            var candidates = OcrQuestionSegmenter.SplitByHeader(pages);
+            return PdfOcrResult.Ok(sourceFileName, pages, candidates);
         }
         catch (OperationCanceledException)
         {

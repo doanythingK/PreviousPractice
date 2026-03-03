@@ -15,13 +15,16 @@ public sealed class PdfOcrResult
     public string Message { get; init; } = string.Empty;
     public DateTimeOffset AnalyzedAt { get; init; } = DateTimeOffset.UtcNow;
     public IReadOnlyList<OcrPageResult> Pages { get; init; } = Array.Empty<OcrPageResult>();
+    public IReadOnlyList<OcrQuestionCandidate> QuestionCandidates { get; init; } = Array.Empty<OcrQuestionCandidate>();
     public int PageCount => Pages.Count;
     public int TotalWordCount => Pages.Sum(x => x.WordCount);
+    public int DetectedQuestionCount => QuestionCandidates.Count;
+    public bool HasQuestionCandidates => QuestionCandidates.Count > 0;
     public bool HasText => Pages.Any(x => !string.IsNullOrWhiteSpace(x.Text));
 
     public string Summary
         => HasText
-            ? $"{SourceFileName} 분석 완료 (페이지: {PageCount}, 단어: {TotalWordCount})"
+            ? $"{SourceFileName} 분석 완료 (페이지: {PageCount}, 단어: {TotalWordCount}, 후보문항: {DetectedQuestionCount}개)"
             : $"{SourceFileName} 분석 결과가 비어 있습니다.";
 
     public string Preview
@@ -46,14 +49,18 @@ public sealed class PdfOcrResult
         };
     }
 
-    public static PdfOcrResult Ok(string sourceFileName, IReadOnlyList<OcrPageResult> pages)
+    public static PdfOcrResult Ok(
+        string sourceFileName,
+        IReadOnlyList<OcrPageResult> pages,
+        IReadOnlyList<OcrQuestionCandidate>? questionCandidates = null)
     {
         return new PdfOcrResult
         {
             IsSuccess = true,
             SourceFileName = sourceFileName,
             Message = "OCR 분석 완료",
-            Pages = pages.ToArray()
+            Pages = pages.ToArray(),
+            QuestionCandidates = questionCandidates?.ToArray() ?? Array.Empty<OcrQuestionCandidate>()
         };
     }
 }
