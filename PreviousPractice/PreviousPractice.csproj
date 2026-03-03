@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net9.0-android;net9.0-windows10.0.19041.0</TargetFrameworks>
+    <TargetFrameworks>net9.0-android;net9.0-ios;net9.0-maccatalyst;net9.0-windows10.0.19041.0</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <RootNamespace>PreviousPractice</RootNamespace>
     <ApplicationTitle>기출문제 연습프로그램</ApplicationTitle>
@@ -17,6 +17,14 @@
   <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'android'">
     <SupportedOSPlatformVersion>21</SupportedOSPlatformVersion>
     <AndroidManifest>Platforms\Android\AndroidManifest.xml</AndroidManifest>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'ios'">
+    <SupportedOSPlatformVersion>15.0</SupportedOSPlatformVersion>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'maccatalyst'">
+    <SupportedOSPlatformVersion>13.1</SupportedOSPlatformVersion>
   </PropertyGroup>
 
   <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">

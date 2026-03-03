@@ -15,8 +15,9 @@
 - 업로드/분석(현재 OCR 분석 반영)
   - 문항 PDF를 앱의 로컬 소스 폴더에 등록
   - 등록된 PDF 목록에서 문항 파일명 선택
-  - `문항 반영` 실행 시 플랫폼 공통 OCR 파이프라인으로 PDF 분석을 수행해 결과를 저장
+- `문항 반영` 실행 시 플랫폼 공통 OCR 파이프라인으로 PDF 분석을 수행해 결과를 저장
   - OCR은 `pdftoppm` 및 `tesseract` 실행 파일을 필요로 하며, 해당 의존성이 없으면 분석 불가 메시지를 표시
+  - iOS는 현재 CLI 기반 OCR이 지원되지 않으며, iOS 전용 OCR 엔진 연동은 추후 반영 예정
   - 정답맵 텍스트(`번호:정답`) 업로드/불러오기
   - 정답맵 파싱 규칙: `번호:정답1|정답2`(객관식 다정답)
   - 문항 분할(문항 번호 추출)은 기출별 패턴 미확정으로 향후 설계
@@ -36,7 +37,10 @@
 2. MAUI 워크로드가 설치된 환경에서 프로젝트 복원  
    - `dotnet restore PreviousPractice/PreviousPractice.csproj`
 3. 실행(예시)  
-   - `dotnet build PreviousPractice/PreviousPractice.csproj -t:Run -f net9.0-windows10.0.19041.0`
+   - Windows: `dotnet build PreviousPractice/PreviousPractice.csproj -t:Run -f net9.0-windows10.0.19041.0`
+   - Android: `dotnet build PreviousPractice/PreviousPractice.csproj -t:Run -f net9.0-android`
+   - macOS: `dotnet build PreviousPractice/PreviousPractice.csproj -t:Run -f net9.0-maccatalyst`
+   - iOS: `dotnet build PreviousPractice/PreviousPractice.csproj -t:Run -f net9.0-ios`
 
 ## 현재 실행 제한
 - 현재 작업 환경에는 MAUI 템플릿/워크로드가 없어 프로젝트 골격 생성 위주로 구성되었으며,

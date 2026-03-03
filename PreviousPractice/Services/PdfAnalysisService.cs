@@ -146,6 +146,13 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
             return PdfOcrResult.Fail(sourceFileName, "문항 PDF 파일을 찾을 수 없습니다.");
         }
 
+        if (OperatingSystem.IsIOS())
+        {
+            return PdfOcrResult.Fail(
+                sourceFileName,
+                "iOS는 현재 외부 CLI 기반 OCR 환경이 없어 PDF OCR 분석을 지원하지 않습니다.");
+        }
+
         var pdftoppmPath = ResolveCommandPath("pdftoppm");
         var tesseractPath = ResolveCommandPath("tesseract");
         if (string.IsNullOrWhiteSpace(pdftoppmPath) || string.IsNullOrWhiteSpace(tesseractPath))
@@ -153,6 +160,19 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
             var missingTools = new List<string>();
             if (string.IsNullOrWhiteSpace(pdftoppmPath)) missingTools.Add("pdftoppm");
             if (string.IsNullOrWhiteSpace(tesseractPath)) missingTools.Add("tesseract");
+
+            if (OperatingSystem.IsAndroid() || OperatingSystem.IsMacOS() || OperatingSystem.IsMacCatalyst())
+            {
+                var platformName = OperatingSystem.IsAndroid()
+                    ? "Android"
+                    : OperatingSystem.IsMacCatalyst()
+                        ? "Mac Catalyst"
+                        : "Mac";
+
+                return PdfOcrResult.Fail(
+                    sourceFileName,
+                    $"{platformName}에서 PDF OCR을 실행하려면 pdftoppm, tesseract가 앱 번들/패키지 경로에 필요합니다. 누락: {string.Join(", ", missingTools)}");
+            }
 
             return PdfOcrResult.Fail(
                 sourceFileName,
@@ -193,8 +213,23 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 var imagePath = images[i];
                 var ocrArgs = $"{Quote(imagePath)} stdout -l kor+eng";
                 var ocrResult = await RunCommandAsync(tesseractPath, ocrArgs, cancellationToken);
-                if (ocrResult.ExitCode != 0 && string.IsNullOrWhiteSpace(ocrResult.StdOut))
+                if (ocrResult.ExitCode != 0)
                 {
+                    if (string.IsNullOrWhiteSpace(ocrResult.StdOut))
+                    {
+                        return PdfOcrResult.Fail(
+                            sourceFileName,
+                            $"이미지 OCR 실행 실패({imagePath}): {ocrResult.StdErr.Trim()}");
+                    }
+
+                    var rawFailedOutput = NormalizeWhitespace(ocrResult.StdOut);
+                    if (string.IsNullOrWhiteSpace(rawFailedOutput))
+                    {
+                        return PdfOcrResult.Fail(
+                            sourceFileName,
+                            "tesseract 실행 결과가 비정상입니다.");
+                    }
+
                     pages.Add(new OcrPageResult(i + 1, string.Empty, 0, 0f));
                     continue;
                 }
@@ -276,7 +311,14 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
             CreateNoWindow = true
         };
 
-        process.Start();
+        try
+        {
+            process.Start();
+        }
+        catch (Exception ex)
+        {
+            return new CommandExecutionResult(-1, string.Empty, ex.Message);
+        }
 
         var stdOutTask = process.StandardOutput.ReadToEndAsync();
         var stdErrTask = process.StandardError.ReadToEndAsync();
