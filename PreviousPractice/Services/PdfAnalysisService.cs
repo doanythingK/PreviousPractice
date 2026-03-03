@@ -68,6 +68,23 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
         return sb.ToString().TrimEnd();
     }
 
+    private static void ReportProgress(
+        IProgress<PdfAnalysisProgress>? progress,
+        int processedPages,
+        int totalPages,
+        string message)
+    {
+        if (progress == null)
+        {
+            return;
+        }
+
+        progress.Report(new PdfAnalysisProgress(
+            Math.Max(0, processedPages),
+            Math.Max(0, totalPages),
+            string.IsNullOrWhiteSpace(message) ? string.Empty : message.Trim()));
+    }
+
 #if WINDOWS
     private static async Task<PdfOcrResult> AnalyzePdfWithWindowsOcrAsync(
         string pdfFilePath,
@@ -448,23 +465,6 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
         }
 
         return null;
-    }
-
-    private static void ReportProgress(
-        IProgress<PdfAnalysisProgress>? progress,
-        int processedPages,
-        int totalPages,
-        string message)
-    {
-        if (progress == null)
-        {
-            return;
-        }
-
-        progress.Report(new PdfAnalysisProgress(
-            Math.Max(0, processedPages),
-            Math.Max(0, totalPages),
-            string.IsNullOrWhiteSpace(message) ? string.Empty : message.Trim()));
     }
 
     private static async Task<CommandExecutionResult> RunCommandAsync(
