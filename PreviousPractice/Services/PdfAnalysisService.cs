@@ -83,7 +83,7 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
         try
         {
             var storageFile = await StorageFile.GetFileFromPathAsync(pdfFilePath);
-            await using var fileStream = await storageFile.OpenReadAsync();
+            using var fileStream = await storageFile.OpenReadAsync();
             var pdfDocument = await PdfDocument.LoadFromStreamAsync(fileStream);
 
             if (pdfDocument.PageCount <= 0)
@@ -112,13 +112,16 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                     continue;
                 }
 
-                var words = ocrResult.Lines.SelectMany(x => x.Words).ToArray();
-                var averageConfidence = words.Length == 0 ? 0f : words.Average(x => x.Confidence);
+                var recognizedText = NormalizeWhitespace(ocrResult.Text);
+                var wordCount = string.IsNullOrWhiteSpace(recognizedText)
+                    ? 0
+                    : recognizedText.Split((char[])['\r', '\n', ' '], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
+                var averageConfidence = wordCount == 0 ? 0f : 100f;
 
                 pages.Add(new OcrPageResult(
                     (int)i + 1,
-                    NormalizeWhitespace(ocrResult.Text),
-                    words.Length,
+                    recognizedText,
+                    wordCount,
                     averageConfidence));
             }
 
