@@ -29,8 +29,10 @@
 ### 2.2 제약/정책
 - OCR 품질이 매우 낮으면 해당 PDF는 처리 불가로 표시
 - OCR 추출은 플랫폼 공통 파이프라인으로 처리하도록 구성. 현재는 Windows와 외부 CLI 연동(예: pdftoppm + tesseract) 기반 경로를 우선 적용하고, 모바일 플랫폼도 동일 인터페이스로 처리하되 의존성 설치/설치 정책은 배포 시점에 맞춰 확정한다.
-  - iOS/macOS는 PDFKit 텍스트 추출 기반 경로를 우선 적용(텍스트 기반 PDF). 이미지형 PDF의 경우 추후 Vision/MLKit 바인딩 기반 OCR로 확장 예정
-  - Android/macOS는 `pdftoppm` 및 `tesseract` 배포/패키징 정책을 맞춰야 분석 가능
+  - iOS/macOS는 PDFKit 텍스트 추출 기반 경로를 우선 적용(텍스트 기반 PDF).
+  - Android(현재)는 `pdftoppm` + `tesseract` 실행 경로를 앱 패키지/번들에서 찾도록 구성.
+  - 운영체제별 OCR 경로는 공통 인터페이스(`IPdfAnalysisService`)에서 분기하며, 배포 시 명령행 도구 경로는 `Tools*` 디렉터리(`Tools`, `Tools/windows`, `Tools/linux`, `Tools/android`)에 배치해 탐색할 수 있도록 설계.
+  - 이미지형 PDF의 고정된 기기 단일 OCR은 미정이며 추후 Vision/MLKit 바인딩 확장 고려
 - 동일 파일명 업로드 시 덮어쓰기 동의 확인 후 진행
 - 오프라인 필수 동작
 - 단일 사용자

@@ -340,8 +340,37 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
             candidates.Add($"{fileName}.exe");
         }
 
+        var baseDirectoryCandidates = new List<string>
+        {
+            string.Empty,
+            AppContext.BaseDirectory,
+            Environment.CurrentDirectory,
+            Path.GetDirectoryName(typeof(PdfAnalysisService).Assembly.Location) ?? string.Empty
+        };
+
         var paths = (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+        foreach (var baseDirectory in baseDirectoryCandidates)
+        {
+            if (string.IsNullOrWhiteSpace(baseDirectory))
+            {
+                continue;
+            }
+
+            paths.Add(baseDirectory);
+            paths.Add(Path.Combine(baseDirectory, "tools"));
+            paths.Add(Path.Combine(baseDirectory, "tools", "linux"));
+            paths.Add(Path.Combine(baseDirectory, "tools", "mac"));
+            paths.Add(Path.Combine(baseDirectory, "tools", "android"));
+
+            if (OperatingSystem.IsWindows())
+            {
+                paths.Add(Path.Combine(baseDirectory, "tools", "windows"));
+            }
+        }
+
         foreach (var path in paths)
         {
             foreach (var candidate in candidates)
