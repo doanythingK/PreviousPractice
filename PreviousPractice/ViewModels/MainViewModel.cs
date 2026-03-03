@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Text.Json;
 using PreviousPractice.Core;
 using PreviousPractice.Data;
 using PreviousPractice.Infrastructure;
@@ -12,11 +13,15 @@ namespace PreviousPractice.ViewModels;
 public class MainViewModel : ViewModelBase
 {
     private readonly IPracticeRepository repository;
+    private readonly IPdfAnalysisService pdfAnalysisService;
     private readonly Random random = new();
     private const string SourceFileDirectoryName = "QuestionSourceFiles";
+    private const string AnalysisDirectoryName = "QuestionSourceOcr";
     private readonly string sourceFileDirectory;
+    private readonly string sourceAnalysisDirectory;
     private string newCategoryName = string.Empty;
     private string answerMapText = string.Empty;
+    private string pdfAnalysisSummary = string.Empty;
     private string practiceCountText = "1";
     private string feedback = string.Empty;
     private string sessionFeedback = string.Empty;
@@ -37,6 +42,12 @@ public class MainViewModel : ViewModelBase
     public ObservableCollection<SourceFileSummary> SourceFiles { get; } = new();
     public ObservableCollection<Question> WrongQuestions { get; } = new();
     public ObservableCollection<string> SourceFilesDirectory { get; } = new();
+
+    public string PdfAnalysisSummary
+    {
+        get => pdfAnalysisSummary;
+        set => SetProperty(ref pdfAnalysisSummary, value);
+    }
 
     public string NewCategoryName
     {
@@ -247,14 +258,16 @@ public class MainViewModel : ViewModelBase
     public RelayCommand LoadSourceFilesFromDirectoryCommand { get; }
     public RelayCommand ImportSourceFileCommand { get; }
 
-    public MainViewModel() : this(new PracticeRepository())
+    public MainViewModel() : this(new PracticeRepository(), new PdfAnalysisService())
     {
     }
 
-    public MainViewModel(IPracticeRepository repository)
+    public MainViewModel(IPracticeRepository repository, IPdfAnalysisService pdfAnalysisService)
     {
         this.repository = repository;
+        this.pdfAnalysisService = pdfAnalysisService;
         sourceFileDirectory = Path.Combine(FileSystem.AppDataDirectory, SourceFileDirectoryName);
+        sourceAnalysisDirectory = Path.Combine(sourceFileDirectory, AnalysisDirectoryName);
         AddCategoryCommand = new RelayCommand(async void () => await AddCategoryAsync());
         ImportAnswerMapCommand = new RelayCommand(async void () => await ImportAnswerMapAsync());
         StartPracticeCommand = new RelayCommand(async void () => await StartPracticeAsync());
@@ -340,14 +353,33 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText, SelectedQuestionType);
-        if (result.IsEmpty)
+        var normalizedSourceFileName = NormalizeSourceFileName(SelectedSourceFileName);
+        var sourceFilePath = Path.Combine(sourceFileDirectory, normalizedSourceFileName);
+        if (!File.Exists(sourceFilePath))
         {
-            Feedback = result.Message;
+            Feedback = $"문항 파일을 찾을 수 없습니다: {normalizedSourceFileName}";
             return;
         }
 
-        var normalizedSourceFileName = NormalizeSourceFileName(SelectedSourceFileName);
+        Feedback = "문항 PDF OCR 분석을 진행 중입니다.";
+        var analysis = await pdfAnalysisService.AnalyzePdfAsync(sourceFilePath);
+        if (!analysis.IsSuccess)
+        {
+            PdfAnalysisSummary = $"문항 분석 실패: {analysis.Message}";
+            Feedback = PdfAnalysisSummary;
+            return;
+        }
+
+        await SavePdfAnalysisAsync(normalizedSourceFileName, analysis);
+        PdfAnalysisSummary = $"{analysis.Summary}\n미리보기:\n{analysis.Preview}";
+
+        var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText, SelectedQuestionType);
+        if (result.IsEmpty)
+        {
+            Feedback = $"{analysis.Summary} / 정답 파일 파싱 실패: {result.Message}";
+            return;
+        }
+
         var shouldOverwrite = OverwriteExisting;
         if (!shouldOverwrite)
         {
@@ -389,7 +421,7 @@ public class MainViewModel : ViewModelBase
             ? $"{questions.Length}개 저장(일부 파싱 오류: {string.Join(", ", result.Errors)})"
             : $"{questions.Length}개 저장 완료";
 
-        Feedback = summary;
+        Feedback = $"{analysis.Summary} / {summary}";
         AnswerMapText = string.Empty;
         await UpdateSelectedCategoryQuestionCountAsync();
         var sourceFile = SourceFiles.FirstOrDefault(x =>
@@ -528,6 +560,39 @@ public class MainViewModel : ViewModelBase
         {
             Feedback = $"문항 파일 등록을 실패했습니다: {ex.Message}";
         }
+    }
+
+    private async Task SavePdfAnalysisAsync(string sourceFileName, PdfOcrResult analysis)
+    {
+        try
+        {
+            Directory.CreateDirectory(sourceAnalysisDirectory);
+
+            var safeFileName = GetSafeFileNameWithoutExtension(sourceFileName);
+            var outputPath = Path.Combine(sourceAnalysisDirectory, $"{safeFileName}.analysis.json");
+
+            var json = JsonSerializer.Serialize(analysis, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+            await File.WriteAllTextAsync(outputPath, json);
+        }
+        catch
+        {
+            // 분석 저장은 선택 동작입니다. 저장 실패는 현재 임시 미리보기에 영향 없음.
+        }
+    }
+
+    private static string GetSafeFileNameWithoutExtension(string fileName)
+    {
+        var baseName = Path.GetFileNameWithoutExtension(fileName).Trim();
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            return "analysis";
+        }
+
+        var invalid = Path.GetInvalidFileNameChars();
+        return new string(baseName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
     }
 
     private static async Task<bool> ConfirmOverwriteImportAsync(string sourceFileName, int existingCount)

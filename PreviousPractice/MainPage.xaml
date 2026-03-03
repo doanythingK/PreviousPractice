@@ -64,6 +64,9 @@
                         </CollectionView.ItemTemplate>
                     </CollectionView>
 
+                    <Label Text="문항 PDF 분석 결과" FontAttributes="Bold" />
+                    <Label Text="{Binding PdfAnalysisSummary}" TextColor="#334155" LineBreakMode="WordWrap" />
+
                     <Button Text="문항 반영" Command="{Binding ImportAnswerMapCommand}" IsEnabled="{Binding CanImportAnswerMap}" />
                 </VerticalStackLayout>
             </Frame>
