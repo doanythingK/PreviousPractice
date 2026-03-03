@@ -21,16 +21,8 @@
 
   <PropertyGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">
     <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
-    <WindowsPackageType>MSIX</WindowsPackageType>
-    <AppxManifest>Platforms\Windows\Package.appxmanifest</AppxManifest>
+    <WindowsPackageType>None</WindowsPackageType>
   </PropertyGroup>
-
-  <ItemGroup Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">
-    <Content Include="Platforms\Windows\Assets\**\*">
-      <Link>Assets\%(Filename)%(Extension)</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-  </ItemGroup>
 
   <ItemGroup>
     <MauiFont Include="Resources/Fonts/**/*.ttf" />
