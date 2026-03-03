@@ -13,8 +13,9 @@ public class MainViewModel : ViewModelBase
 {
     private readonly IPracticeRepository repository;
     private readonly Random random = new();
+    private const string SourceFileDirectoryName = "QuestionSourceFiles";
+    private readonly string sourceFileDirectory;
     private string newCategoryName = string.Empty;
-    private string sourceFileName = "manual.txt";
     private string answerMapText = string.Empty;
     private string practiceCountText = "1";
     private string feedback = string.Empty;
@@ -29,11 +30,13 @@ public class MainViewModel : ViewModelBase
     private int correctCount;
     private int selectedCategoryQuestionCount;
     private SourceFileSummary? selectedSourceFile;
+    private string selectedSourceFileName = string.Empty;
     private IReadOnlyList<Question> currentSession = Array.Empty<Question>();
 
     public ObservableCollection<Category> Categories { get; } = new();
     public ObservableCollection<SourceFileSummary> SourceFiles { get; } = new();
     public ObservableCollection<Question> WrongQuestions { get; } = new();
+    public ObservableCollection<string> SourceFilesDirectory { get; } = new();
 
     public string NewCategoryName
     {
@@ -47,16 +50,33 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public string SourceFileName
+    public string SelectedSourceFileName
     {
-        get => sourceFileName;
-        set => SetProperty(ref sourceFileName, value);
+        get => selectedSourceFileName;
+        set
+        {
+            if (SetProperty(ref selectedSourceFileName, value))
+            {
+                OnPropertyChanged(nameof(CanImportAnswerMap));
+            }
+        }
     }
+
+    public bool CanImportAnswerMap =>
+        SelectedCategory != null &&
+        !string.IsNullOrWhiteSpace(AnswerMapText) &&
+        !string.IsNullOrWhiteSpace(SelectedSourceFileName);
 
     public string AnswerMapText
     {
         get => answerMapText;
-        set => SetProperty(ref answerMapText, value);
+        set
+        {
+            if (SetProperty(ref answerMapText, value))
+            {
+                OnPropertyChanged(nameof(CanImportAnswerMap));
+            }
+        }
     }
 
     public string PracticeCountText
@@ -120,6 +140,7 @@ public class MainViewModel : ViewModelBase
                 OnPropertyChanged(nameof(CanStartPractice));
                 OnPropertyChanged(nameof(CanDeleteCategory));
                 OnPropertyChanged(nameof(CanDeleteSourceFile));
+                OnPropertyChanged(nameof(CanImportAnswerMap));
                 _ = UpdateSelectedCategoryQuestionCountAsync();
             }
         }
@@ -223,6 +244,8 @@ public class MainViewModel : ViewModelBase
     public RelayCommand DeleteCategoryCommand { get; }
     public RelayCommand<SourceFileSummary?> DeleteSourceFileCommand { get; }
     public RelayCommand LoadAnswerFileCommand { get; }
+    public RelayCommand LoadSourceFilesFromDirectoryCommand { get; }
+    public RelayCommand ImportSourceFileCommand { get; }
 
     public MainViewModel() : this(new PracticeRepository())
     {
@@ -231,6 +254,7 @@ public class MainViewModel : ViewModelBase
     public MainViewModel(IPracticeRepository repository)
     {
         this.repository = repository;
+        sourceFileDirectory = Path.Combine(FileSystem.AppDataDirectory, SourceFileDirectoryName);
         AddCategoryCommand = new RelayCommand(async void () => await AddCategoryAsync());
         ImportAnswerMapCommand = new RelayCommand(async void () => await ImportAnswerMapAsync());
         StartPracticeCommand = new RelayCommand(async void () => await StartPracticeAsync());
@@ -241,6 +265,8 @@ public class MainViewModel : ViewModelBase
         DeleteCategoryCommand = new RelayCommand(async void () => await DeleteCategoryAsync());
         DeleteSourceFileCommand = new RelayCommand<SourceFileSummary?>(async source => await DeleteSourceFileAsync(source));
         LoadAnswerFileCommand = new RelayCommand(async void () => await LoadAnswerFileAsync());
+        LoadSourceFilesFromDirectoryCommand = new RelayCommand(async void () => await LoadSourceFilesFromDirectoryAsync());
+        ImportSourceFileCommand = new RelayCommand(async void () => await ImportSourceFileAsync());
 
         _ = LoadAsync();
     }
@@ -258,6 +284,7 @@ public class MainViewModel : ViewModelBase
 
     private async Task LoadAsync()
     {
+        await LoadSourceFilesFromDirectoryAsync();
         var categories = await repository.GetCategoriesAsync();
         Categories.Clear();
         foreach (var category in categories)
@@ -307,6 +334,12 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(SelectedSourceFileName))
+        {
+            Feedback = "문항 파일을 먼저 선택해 주세요.";
+            return;
+        }
+
         var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText, SelectedQuestionType);
         if (result.IsEmpty)
         {
@@ -314,7 +347,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        var normalizedSourceFileName = NormalizeSourceFileName(SourceFileName);
+        var normalizedSourceFileName = NormalizeSourceFileName(SelectedSourceFileName);
         var shouldOverwrite = OverwriteExisting;
         if (!shouldOverwrite)
         {
@@ -348,7 +381,7 @@ public class MainViewModel : ViewModelBase
 
         await repository.SaveImportedQuestionsAsync(
             SelectedCategory.Id,
-            questions.Length == 0 ? "manual" : normalizedSourceFileName,
+            normalizedSourceFileName,
             questions,
             overwriteBySourceFile: shouldOverwrite);
 
@@ -396,17 +429,104 @@ public class MainViewModel : ViewModelBase
             var content = await reader.ReadToEndAsync();
             AnswerMapText = content;
 
-            var fileBaseName = Path.GetFileNameWithoutExtension(file.FileName);
-            if (!string.IsNullOrWhiteSpace(fileBaseName))
-            {
-                SourceFileName = fileBaseName;
-            }
-
             Feedback = $"정답 파일을 불러왔습니다: {file.FileName}";
         }
         catch (Exception ex)
         {
             Feedback = $"정답 파일을 불러오지 못했습니다: {ex.Message}";
+        }
+    }
+
+    private async Task LoadSourceFilesFromDirectoryAsync()
+    {
+        try
+        {
+            Directory.CreateDirectory(sourceFileDirectory);
+            var files = Directory.EnumerateFiles(sourceFileDirectory)
+                .Where(path => string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase))
+                .Select(Path.GetFileName)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            SourceFilesDirectory.Clear();
+            foreach (var file in files)
+            {
+                SourceFilesDirectory.Add(file);
+            }
+
+            if (!SourceFilesDirectory.Any())
+            {
+                SelectedSourceFileName = string.Empty;
+            }
+            else if (string.IsNullOrWhiteSpace(SelectedSourceFileName) ||
+                     !SourceFilesDirectory.Contains(SelectedSourceFileName, StringComparer.OrdinalIgnoreCase))
+            {
+                SelectedSourceFileName = SourceFilesDirectory.FirstOrDefault();
+            }
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"문항 파일 목록을 읽지 못했습니다: {ex.Message}";
+        }
+
+        OnPropertyChanged(nameof(CanImportAnswerMap));
+    }
+
+    private async Task ImportSourceFileAsync()
+    {
+        try
+        {
+            var options = new PickOptions
+            {
+                PickerTitle = "문항 PDF 선택",
+                FileTypes = new FilePickerFileType(new Dictionary<DevicePlatform, IEnumerable<string>>
+                {
+                    { DevicePlatform.WinUI, new[] { ".pdf" } },
+                    { DevicePlatform.MacCatalyst, new[] { "public.pdf", "com.adobe.pdf" } },
+                    { DevicePlatform.iOS, new[] { "public.pdf", "com.adobe.pdf" } },
+                    { DevicePlatform.Android, new[] { "application/pdf", "application/octet-stream", ".pdf" } },
+                })
+            };
+
+            var file = await FilePicker.PickAsync(options);
+            if (file == null)
+            {
+                Feedback = "문항 파일 선택이 취소되었습니다.";
+                return;
+            }
+
+            Directory.CreateDirectory(sourceFileDirectory);
+            var sourceFileName = file.FileName?.Trim();
+            if (string.IsNullOrWhiteSpace(sourceFileName))
+            {
+                Feedback = "문항 파일 이름을 가져올 수 없습니다.";
+                return;
+            }
+
+            var destinationPath = Path.Combine(sourceFileDirectory, sourceFileName);
+            if (File.Exists(destinationPath))
+            {
+                var overwrite = await ConfirmOverwriteSourceFileAsync(sourceFileName);
+                if (!overwrite)
+                {
+                    Feedback = "문항 파일 등록을 취소했습니다.";
+                    return;
+                }
+            }
+
+            await using var sourceStream = await file.OpenReadAsync();
+            await using var destinationStream = File.Create(destinationPath);
+            await sourceStream.CopyToAsync(destinationStream);
+
+            Feedback = $"문항 파일을 등록했습니다: {sourceFileName}";
+            await LoadSourceFilesFromDirectoryAsync();
+            SelectedSourceFileName = sourceFileName;
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"문항 파일 등록을 실패했습니다: {ex.Message}";
         }
     }
 
@@ -422,6 +542,22 @@ public class MainViewModel : ViewModelBase
 
         return await Application.Current.MainPage.DisplayAlert(
             "문항 반영",
+            message,
+            "덮어쓰기",
+            "취소");
+    }
+
+    private static async Task<bool> ConfirmOverwriteSourceFileAsync(string sourceFileName)
+    {
+        if (Application.Current?.MainPage == null)
+        {
+            return false;
+        }
+
+        var message = $"'{sourceFileName}' 파일이 이미 존재합니다.\n덮어쓰기 하시겠습니까?";
+
+        return await Application.Current.MainPage.DisplayAlert(
+            "문항 파일 등록",
             message,
             "덮어쓰기",
             "취소");

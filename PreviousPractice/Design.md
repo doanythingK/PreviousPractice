@@ -71,6 +71,8 @@
 - `MultipleChoice`(객관식): 문자열을 `:` 기준으로 정답을 파싱하여 숫자 배열로 저장
 - 정답이 여러 개인 경우 (`|` 구분) 사용자 정답과 교집합이 있으면 정답 처리
 - `Subjective`(주관식): 양끝 공백만 제거한 뒤 `ToUpperInvariant` 비교
+- `문항 파일명`은 수동 입력이 아닌 **앱 로컬 `QuestionSourceFiles` 디렉토리에서 읽은 PDF 파일 목록**에서 선택되며,
+  정답 맵 반영 시 해당 파일명을 `SourceFileName`으로 사용한다.
 
 ## 4. 핵심 데이터 모델(안)
 - `Category`
