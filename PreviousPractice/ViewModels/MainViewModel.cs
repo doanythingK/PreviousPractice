@@ -39,6 +39,7 @@ public class MainViewModel : ViewModelBase
     private bool overwriteExisting;
     private Category? selectedCategory;
     private Question? currentQuestion;
+    private ImageSource? currentQuestionImage;
     private int sessionCount;
     private int currentIndex;
     private int correctCount;
@@ -327,6 +328,16 @@ public class MainViewModel : ViewModelBase
 
     public string CurrentQuestionText => CurrentQuestion?.Prompt ?? string.Empty;
 
+    public ImageSource? CurrentQuestionImage
+    {
+        get => currentQuestionImage;
+        private set => SetProperty(ref currentQuestionImage, value);
+    }
+
+    public bool HasCurrentQuestionImage => CurrentQuestionImage != null;
+
+    public bool ShowCurrentQuestionText => !HasCurrentQuestionImage;
+
     public string CurrentQuestionChoicesText => CurrentQuestion is null || CurrentQuestion.Choices.Length == 0
         ? string.Empty
         : string.Join("\n", CurrentQuestion.Choices.Select((x, i) => $"{i + 1}. {x}"));
@@ -444,8 +455,15 @@ public class MainViewModel : ViewModelBase
         if (string.IsNullOrWhiteSpace(sourceFilePath) || !File.Exists(sourceFilePath))
         {
             Feedback = $"문항 파일을 찾을 수 없습니다: {normalizedSourceFileName}";
+            AppLog.Error(
+                nameof(MainViewModel),
+                $"문항 파일 경로 확인 실패 | source={normalizedSourceFileName}");
             return;
         }
+
+        AppLog.Info(
+            nameof(MainViewModel),
+            $"문항 분석 시작 | category={SelectedCategory.Id} | file={sourceFilePath}");
 
         ClearPdfAnalysisState();
         IsPdfAnalysisInProgress = true;
@@ -464,9 +482,16 @@ public class MainViewModel : ViewModelBase
                 PdfAnalysisSummary = $"문항 분석 실패: {analysis.Message}";
                 PdfAnalysisStatus = "문항 분석이 실패했습니다. 상태를 확인해 주세요.";
                 PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
-                Feedback = PdfAnalysisSummary;
+                Feedback = $"{PdfAnalysisSummary}\n로그: {AppLog.CurrentLogFilePath}";
+                AppLog.Error(
+                    nameof(MainViewModel),
+                    $"문항 분석 실패 | file={sourceFilePath} | reason={analysis.Message}");
                 return;
             }
+
+            AppLog.Info(
+                nameof(MainViewModel),
+                $"문항 분석 성공 | file={sourceFilePath} | pages={analysis.PageCount} | candidates={analysis.DetectedQuestionCount}");
 
             UpdatePdfAnalysisProgress(new PdfAnalysisProgress(
                 analysis.PageCount,
@@ -482,6 +507,9 @@ public class MainViewModel : ViewModelBase
             if (!analysis.HasQuestionCandidates && result.IsEmpty)
             {
                 Feedback = $"{analysis.Summary} / 문항 후보가 없어 저장할 수 없습니다.";
+                AppLog.Error(
+                    nameof(MainViewModel),
+                    $"문항 저장 중단 | 후보 0개 & 정답맵 비어있음 | file={sourceFilePath}");
                 return;
             }
 
@@ -524,6 +552,11 @@ public class MainViewModel : ViewModelBase
                 .Select(x =>
                 {
                     var hasAnswer = answerByIndex.TryGetValue(x, out var parsedQuestion);
+                    var matchedCandidate = ResolveQuestionCandidate(candidateByIndex, x);
+                    var questionImagePath = matchedCandidate == null
+                        ? null
+                        : analysis.Pages.FirstOrDefault(p => p.PageIndex == matchedCandidate.StartPage)?.ImagePath;
+
                     var question = new Question
                     {
                         CategoryId = SelectedCategory.Id,
@@ -535,7 +568,8 @@ public class MainViewModel : ViewModelBase
                         CorrectAnswers = hasAnswer
                             ? parsedQuestion.CorrectAnswers
                             : Array.Empty<string>(),
-                        Choices = Array.Empty<string>()
+                        Choices = Array.Empty<string>(),
+                        ImagePath = questionImagePath
                     };
 
                     if (candidateByIndex.TryGetValue(x, out var candidate))
@@ -562,6 +596,9 @@ public class MainViewModel : ViewModelBase
             if (questions.Length == 0)
             {
                 Feedback = $"{analysis.Summary} / 저장할 문항 후보가 없습니다. 정답 맵에서 문항 번호를 먼저 넣어주세요.";
+                AppLog.Error(
+                    nameof(MainViewModel),
+                    $"문항 저장 중단 | 생성된 questions=0 | file={sourceFilePath}");
                 return;
             }
 
@@ -580,6 +617,9 @@ public class MainViewModel : ViewModelBase
                 : $"{questions.Length}개 저장 완료";
 
             Feedback = $"{analysis.Summary} / {summary}";
+            AppLog.Info(
+                nameof(MainViewModel),
+                $"문항 반영 완료 | file={sourceFilePath} | saved={questions.Length}");
             AnswerMapText = string.Empty;
             await UpdateSelectedCategoryQuestionCountAsync();
             var sourceFile = SourceFiles.FirstOrDefault(x =>
@@ -596,11 +636,36 @@ public class MainViewModel : ViewModelBase
             PdfAnalysisSummary = $"문항 분석 실패: {ex.Message}";
             PdfAnalysisStatus = "문항 분석 중 오류가 발생했습니다.";
             PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
+            AppLog.Error(
+                nameof(MainViewModel),
+                $"문항 분석 예외 | file={sourceFilePath}",
+                ex);
         }
         finally
         {
             IsPdfAnalysisInProgress = false;
         }
+    }
+
+    private static OcrQuestionCandidate? ResolveQuestionCandidate(
+        IReadOnlyDictionary<int, OcrQuestionCandidate> candidates,
+        int index)
+    {
+        if (candidates == null || candidates.Count == 0)
+        {
+            return null;
+        }
+
+        if (candidates.TryGetValue(index, out var candidate))
+        {
+            return candidate;
+        }
+
+        return candidates
+            .OrderBy(x => Math.Abs(x.Key - index))
+            .ThenBy(x => x.Key)
+            .FirstOrDefault()
+            .Value;
     }
 
     private void ClearPdfAnalysisState()
@@ -788,10 +853,17 @@ public class MainViewModel : ViewModelBase
                 WriteIndented = true
             });
             await File.WriteAllTextAsync(outputPath, json);
+            AppLog.Info(
+                nameof(MainViewModel),
+                $"분석 JSON 저장 완료 | file={sourceFileName} | path={outputPath}");
         }
-        catch
+        catch (Exception ex)
         {
             // 분석 저장은 선택 동작입니다. 저장 실패는 현재 임시 미리보기에 영향 없음.
+            AppLog.Error(
+                nameof(MainViewModel),
+                $"분석 JSON 저장 실패 | file={sourceFileName}",
+                ex);
         }
     }
 
@@ -952,8 +1024,11 @@ public class MainViewModel : ViewModelBase
         {
             IsPracticeRunning = false;
             CurrentQuestion = null;
+            CurrentQuestionImage = null;
             OnPropertyChanged(nameof(CurrentQuestionText));
             OnPropertyChanged(nameof(CurrentQuestionChoicesText));
+            OnPropertyChanged(nameof(HasCurrentQuestionImage));
+            OnPropertyChanged(nameof(ShowCurrentQuestionText));
             SessionFeedback += $"\n총 {CorrectCount}/{SessionTotalCount}개 정답";
             UpdatePracticeState();
             return;
@@ -967,8 +1042,28 @@ public class MainViewModel : ViewModelBase
     private void SetCurrentQuestion(Question question)
     {
         CurrentQuestion = question;
+        CurrentQuestionImage = BuildQuestionImageSource(question?.ImagePath);
         OnPropertyChanged(nameof(CurrentQuestionText));
         OnPropertyChanged(nameof(CurrentQuestionChoicesText));
+        OnPropertyChanged(nameof(HasCurrentQuestionImage));
+        OnPropertyChanged(nameof(ShowCurrentQuestionText));
+    }
+
+    private static ImageSource? BuildQuestionImageSource(string? imagePath)
+    {
+        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            return ImageSource.FromStream(() => File.OpenRead(imagePath));
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task ReloadWrongAsync()

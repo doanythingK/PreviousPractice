@@ -11,11 +11,6 @@ using Windows.Media.Ocr;
 using Windows.Storage;
 using Windows.Storage.Streams;
 #endif
-#if IOS || MACCATALYST
-using Foundation;
-using PDFKit;
-#endif
-
 namespace PreviousPractice.Services;
 
 public interface IPdfAnalysisService
@@ -30,15 +25,18 @@ public sealed record PdfAnalysisProgress(int ProcessedPages, int TotalPages, str
 
 public sealed class PdfAnalysisService : IPdfAnalysisService
 {
+    private const string ImageCacheRoot = "QuestionSourceImageCache";
+
     public Task<PdfOcrResult> AnalyzePdfAsync(
         string pdfFilePath,
         IProgress<PdfAnalysisProgress>? progress = null,
         CancellationToken cancellationToken = default)
     {
+        AppLog.Info(
+            nameof(PdfAnalysisService),
+            $"AnalyzePdfAsync 시작 | file={pdfFilePath} | os={Environment.OSVersion.Platform}");
 #if WINDOWS
         return AnalyzePdfWithWindowsOcrAsync(pdfFilePath, progress, cancellationToken);
-#elif IOS || MACCATALYST
-        return AnalyzePdfWithPdfKitAsync(pdfFilePath, progress, cancellationToken);
 #else
         return AnalyzePdfWithCommandLineToolsAsync(pdfFilePath, progress, cancellationToken);
 #endif
@@ -68,6 +66,45 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
         return sb.ToString().TrimEnd();
     }
 
+    private static PdfOcrResult FailWithLog(string sourceFileName, string message, Exception? ex = null)
+    {
+        AppLog.Error(
+            nameof(PdfAnalysisService),
+            $"OCR 실패 | file={sourceFileName} | reason={message}",
+            ex);
+        return PdfOcrResult.Fail(sourceFileName, message);
+    }
+
+    private static void LogPageSummary(string sourceFileName, IReadOnlyList<OcrPageResult> pages)
+    {
+        if (pages.Count == 0)
+        {
+            AppLog.Error(
+                nameof(PdfAnalysisService),
+                $"OCR 페이지 요약 없음 | file={sourceFileName} | pages=0");
+            return;
+        }
+
+        var nonEmptyPageCount = pages.Count(x => !string.IsNullOrWhiteSpace(x.Text));
+        var samples = pages
+            .Take(10)
+            .Select(p =>
+            {
+                var head = p.Text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+                if (head.Length > 60)
+                {
+                    head = head[..60] + "...";
+                }
+
+                return $"p{p.PageIndex}:words={p.WordCount},textLen={p.Text.Length},img={(string.IsNullOrWhiteSpace(p.ImagePath) ? "N" : "Y")},head={head}";
+            })
+            .ToArray();
+
+        AppLog.Info(
+            nameof(PdfAnalysisService),
+            $"OCR 페이지 요약 | file={sourceFileName} | pages={pages.Count} | nonEmpty={nonEmptyPageCount} | sample={string.Join(" | ", samples)}");
+    }
+
     private static void ReportProgress(
         IProgress<PdfAnalysisProgress>? progress,
         int processedPages,
@@ -85,6 +122,65 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
             string.IsNullOrWhiteSpace(message) ? string.Empty : message.Trim()));
     }
 
+    private static string PrepareImageDirectory(string sourceFileName)
+    {
+        var baseDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "PreviousPractice",
+            ImageCacheRoot);
+
+        Directory.CreateDirectory(baseDirectory);
+
+        var safeName = GetSafeFileNameWithoutExtension(sourceFileName);
+        var imageDirectory = Path.Combine(baseDirectory, safeName);
+        Directory.CreateDirectory(imageDirectory);
+
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(imageDirectory))
+            {
+                try
+                {
+                    File.Delete(file);
+                }
+                catch
+                {
+                }
+            }
+        }
+        catch
+        {
+        }
+
+        return imageDirectory;
+    }
+
+    private static string GetSafeFileNameWithoutExtension(string fileName)
+    {
+        var baseName = Path.GetFileNameWithoutExtension(fileName).Trim();
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            return "analysis";
+        }
+
+        var invalid = Path.GetInvalidFileNameChars();
+        return new string(baseName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+    }
+
+    private static string BuildPageImagePath(string imageDirectory, int pageIndex)
+    {
+        return Path.Combine(imageDirectory, $"page-{pageIndex:D4}.png");
+    }
+
+    #if WINDOWS
+    private static async Task SaveImageStreamAsync(IRandomAccessStream imageStream, string destinationPath)
+    {
+        imageStream.Seek(0);
+        using var destination = File.Create(destinationPath);
+        await imageStream.AsStreamForRead().CopyToAsync(destination);
+    }
+    #endif
+
 #if WINDOWS
     private static async Task<PdfOcrResult> AnalyzePdfWithWindowsOcrAsync(
         string pdfFilePath,
@@ -93,30 +189,31 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
     {
         if (string.IsNullOrWhiteSpace(pdfFilePath))
         {
-            return PdfOcrResult.Fail("unknown.pdf", "문항 PDF 경로가 비어 있습니다.");
+            return FailWithLog("unknown.pdf", "문항 PDF 경로가 비어 있습니다.");
         }
 
         if (!File.Exists(pdfFilePath))
         {
-            return PdfOcrResult.Fail(Path.GetFileName(pdfFilePath), "문항 PDF 파일을 찾을 수 없습니다.");
+            return FailWithLog(Path.GetFileName(pdfFilePath), "문항 PDF 파일을 찾을 수 없습니다.");
         }
 
         var sourceFileName = Path.GetFileName(pdfFilePath);
         var ocrEngine = OcrEngine.TryCreateFromUserProfileLanguages();
         if (ocrEngine == null)
         {
-            return PdfOcrResult.Fail(sourceFileName, "현재 장치에서 OCR 엔진을 사용할 수 없습니다.");
+            return FailWithLog(sourceFileName, "현재 장치에서 OCR 엔진을 사용할 수 없습니다.");
         }
 
         try
         {
+            var imageDirectory = PrepareImageDirectory(sourceFileName);
             var storageFile = await StorageFile.GetFileFromPathAsync(pdfFilePath);
             using var fileStream = await storageFile.OpenReadAsync();
             var pdfDocument = await PdfDocument.LoadFromStreamAsync(fileStream);
 
             if (pdfDocument.PageCount <= 0)
             {
-                return PdfOcrResult.Fail(sourceFileName, "페이지가 없는 PDF 파일입니다.");
+                return FailWithLog(sourceFileName, "페이지가 없는 PDF 파일입니다.");
             }
 
             var totalPages = (int)pdfDocument.PageCount;
@@ -149,6 +246,15 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                     continue;
                 }
 
+                var imagePath = BuildPageImagePath(imageDirectory, (int)i + 1);
+                try
+                {
+                    await SaveImageStreamAsync(imageStream, imagePath);
+                }
+                catch
+                {
+                }
+
                 var recognizedText = NormalizeWhitespace(ocrResult.Text);
                 var wordCount = string.IsNullOrWhiteSpace(recognizedText)
                     ? 0
@@ -161,106 +267,31 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                     (int)i + 1,
                     recognizedText,
                     wordCount,
-                    averageConfidence));
+                    averageConfidence,
+                    File.Exists(imagePath) ? imagePath : null));
             }
 
             ReportProgress(progress, totalPages, totalPages, "OCR 분석 완료");
+            LogPageSummary(sourceFileName, pages);
 
             if (pages.Count == 0 || !pages.Any(x => !string.IsNullOrWhiteSpace(x.Text)))
             {
-                return PdfOcrResult.Fail(sourceFileName, "이미지에서 텍스트를 추출하지 못했습니다.");
+                return FailWithLog(sourceFileName, "이미지에서 텍스트를 추출하지 못했습니다.");
             }
 
             var candidates = OcrQuestionSegmenter.SplitByHeader(pages);
+            AppLog.Info(
+                nameof(PdfAnalysisService),
+                $"OCR 성공 | file={sourceFileName} | pages={pages.Count} | candidates={candidates.Count}");
             return PdfOcrResult.Ok(sourceFileName, pages, candidates);
         }
         catch (OperationCanceledException)
         {
-            return PdfOcrResult.Fail(sourceFileName, "OCR 분석이 취소되었습니다.");
+            return FailWithLog(sourceFileName, "OCR 분석이 취소되었습니다.");
         }
         catch (Exception ex)
         {
-            return PdfOcrResult.Fail(sourceFileName, $"OCR 처리 중 오류: {ex.Message}");
-        }
-    }
-
-#elif IOS || MACCATALYST
-    private static async Task<PdfOcrResult> AnalyzePdfWithPdfKitAsync(
-        string pdfFilePath,
-        IProgress<PdfAnalysisProgress>? progress,
-        CancellationToken cancellationToken = default)
-    {
-        var sourceFileName = Path.GetFileName(pdfFilePath);
-        if (string.IsNullOrWhiteSpace(pdfFilePath))
-        {
-            return PdfOcrResult.Fail("unknown.pdf", "문항 PDF 경로가 비어 있습니다.");
-        }
-
-        if (!File.Exists(pdfFilePath))
-        {
-            return PdfOcrResult.Fail(sourceFileName, "문항 PDF 파일을 찾을 수 없습니다.");
-        }
-
-        await Task.Yield();
-
-        try
-        {
-            using var documentUrl = NSUrl.FromFilename(pdfFilePath);
-            using var pdfDocument = new PDFDocument(documentUrl);
-            if (pdfDocument == null || pdfDocument.PageCount <= 0)
-            {
-                return PdfOcrResult.Fail(sourceFileName, "PDF 문서가 비어 있거나 열 수 없습니다.");
-            }
-
-            var totalPages = pdfDocument.PageCount;
-            ReportProgress(progress, 0, totalPages, "PDF 텍스트 추출 시작");
-
-            var pages = new List<OcrPageResult>();
-            for (var i = 0; i < pdfDocument.PageCount; i++)
-            {
-                ReportProgress(
-                    progress,
-                    i,
-                    totalPages,
-                    $"페이지 {i + 1}/{totalPages} 텍스트 추출 중");
-
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var page = pdfDocument.GetPage(i);
-                if (page == null)
-                {
-                    continue;
-                }
-
-                var raw = NormalizeWhitespace(page.String);
-                var wordCount = string.IsNullOrWhiteSpace(raw)
-                    ? 0
-                    : raw.Split(
-                        new[] { '\r', '\n', ' ' },
-                        StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
-
-                pages.Add(new OcrPageResult(i + 1, raw, wordCount, 0f));
-            }
-
-            ReportProgress(progress, totalPages, totalPages, "텍스트 추출 완료");
-
-            if (pages.Count == 0 || !pages.Any(x => !string.IsNullOrWhiteSpace(x.Text)))
-            {
-                return PdfOcrResult.Fail(
-                    sourceFileName,
-                    "이 PDF는 텍스트 추출이 되지 않습니다. 현재 iOS/macOS는 이미지 OCR이 아니라 PDF 내장 텍스트 추출로만 분석됩니다.");
-            }
-
-            var candidates = OcrQuestionSegmenter.SplitByHeader(pages);
-            return PdfOcrResult.Ok(sourceFileName, pages, candidates);
-        }
-        catch (OperationCanceledException)
-        {
-            return PdfOcrResult.Fail(sourceFileName, "OCR 분석이 취소되었습니다.");
-        }
-        catch (Exception ex)
-        {
-            return PdfOcrResult.Fail(sourceFileName, $"PDF 텍스트 추출 중 오류: {ex.Message}");
+            return FailWithLog(sourceFileName, $"OCR 처리 중 오류: {ex.Message}", ex);
         }
     }
 
@@ -273,12 +304,12 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
         var sourceFileName = Path.GetFileName(pdfFilePath);
         if (string.IsNullOrWhiteSpace(pdfFilePath))
         {
-            return PdfOcrResult.Fail("unknown.pdf", "문항 PDF 경로가 비어 있습니다.");
+            return FailWithLog("unknown.pdf", "문항 PDF 경로가 비어 있습니다.");
         }
 
         if (!File.Exists(pdfFilePath))
         {
-            return PdfOcrResult.Fail(sourceFileName, "문항 PDF 파일을 찾을 수 없습니다.");
+            return FailWithLog(sourceFileName, "문항 PDF 파일을 찾을 수 없습니다.");
         }
 
         var pdftoppmPath = ResolveCommandPath("pdftoppm");
@@ -289,20 +320,22 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
             if (string.IsNullOrWhiteSpace(pdftoppmPath)) missingTools.Add("pdftoppm");
             if (string.IsNullOrWhiteSpace(tesseractPath)) missingTools.Add("tesseract");
 
-            if (OperatingSystem.IsAndroid() || OperatingSystem.IsMacOS() || OperatingSystem.IsMacCatalyst())
+            if (OperatingSystem.IsAndroid() || OperatingSystem.IsMacOS() || OperatingSystem.IsMacCatalyst() || OperatingSystem.IsIOS())
             {
                 var platformName = OperatingSystem.IsAndroid()
                     ? "Android"
-                    : OperatingSystem.IsMacCatalyst()
+                    : OperatingSystem.IsIOS()
+                        ? "iOS"
+                        : OperatingSystem.IsMacCatalyst()
                         ? "Mac Catalyst"
                         : "Mac";
 
-                return PdfOcrResult.Fail(
+                return FailWithLog(
                     sourceFileName,
                     $"{platformName}에서 PDF OCR을 실행하려면 pdftoppm, tesseract가 앱 번들/패키지 경로에 필요합니다. 누락: {string.Join(", ", missingTools)}");
             }
 
-                return PdfOcrResult.Fail(
+                return FailWithLog(
                     sourceFileName,
                     $"필요한 OCR 도구를 찾을 수 없습니다. 누락: {string.Join(", ", missingTools)}");
         }
@@ -313,13 +346,14 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
 
         try
         {
+            var imageDirectory = PrepareImageDirectory(sourceFileName);
             var imageBase = Path.Combine(workDirectory, "page");
             var renderArgs = $"-png -r 300 {Quote(pdfFilePath)} {Quote(imageBase)}";
             var renderResult = await RunCommandAsync(pdftoppmPath, renderArgs, cancellationToken);
 
             if (renderResult.ExitCode != 0)
             {
-                return PdfOcrResult.Fail(
+                return FailWithLog(
                     sourceFileName,
                     $"pdftoppm 실행 실패: {renderResult.StdErr.Trim()}");
             }
@@ -331,7 +365,7 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
 
             if (images.Length == 0)
             {
-                return PdfOcrResult.Fail(sourceFileName, "PDF 페이지를 이미지로 변환하지 못했습니다.");
+                return FailWithLog(sourceFileName, "PDF 페이지를 이미지로 변환하지 못했습니다.");
             }
 
             var totalPages = images.Length;
@@ -349,13 +383,14 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var imagePath = images[i];
+                var cachedImagePath = BuildPageImagePath(imageDirectory, i + 1);
                 var ocrArgs = $"{Quote(imagePath)} stdout -l kor+eng";
                 var ocrResult = await RunCommandAsync(tesseractPath, ocrArgs, cancellationToken);
                 if (ocrResult.ExitCode != 0)
                 {
                     if (string.IsNullOrWhiteSpace(ocrResult.StdOut))
                     {
-                        return PdfOcrResult.Fail(
+                        return FailWithLog(
                             sourceFileName,
                             $"이미지 OCR 실행 실패({imagePath}): {ocrResult.StdErr.Trim()}");
                     }
@@ -363,12 +398,25 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                     var rawFailedOutput = NormalizeWhitespace(ocrResult.StdOut);
                     if (string.IsNullOrWhiteSpace(rawFailedOutput))
                     {
-                        return PdfOcrResult.Fail(
+                        return FailWithLog(
                             sourceFileName,
                             "tesseract 실행 결과가 비정상입니다.");
                     }
 
-                    pages.Add(new OcrPageResult(i + 1, string.Empty, 0, 0f));
+                    try
+                    {
+                        File.Copy(imagePath, cachedImagePath, overwrite: true);
+                    }
+                    catch
+                    {
+                    }
+
+                    pages.Add(new OcrPageResult(
+                        i + 1,
+                        string.Empty,
+                        0,
+                        0f,
+                        File.Exists(cachedImagePath) ? cachedImagePath : null));
                     continue;
                 }
 
@@ -379,26 +427,43 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                         new[] { '\r', '\n', ' ' },
                         StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Length;
 
-                pages.Add(new OcrPageResult(i + 1, raw, wordCount, 0f));
+                try
+                {
+                    File.Copy(imagePath, cachedImagePath, overwrite: true);
+                }
+                catch
+                {
+                }
+
+                pages.Add(new OcrPageResult(
+                    i + 1,
+                    raw,
+                    wordCount,
+                    0f,
+                    File.Exists(cachedImagePath) ? cachedImagePath : null));
             }
 
             ReportProgress(progress, totalPages, totalPages, "OCR 분석 완료");
+            LogPageSummary(sourceFileName, pages);
 
             if (!pages.Any(x => !string.IsNullOrWhiteSpace(x.Text)))
             {
-                return PdfOcrResult.Fail(sourceFileName, "이미지에서 텍스트를 추출하지 못했습니다.");
+                return FailWithLog(sourceFileName, "이미지에서 텍스트를 추출하지 못했습니다.");
             }
 
             var candidates = OcrQuestionSegmenter.SplitByHeader(pages);
+            AppLog.Info(
+                nameof(PdfAnalysisService),
+                $"OCR 성공 | file={sourceFileName} | pages={pages.Count} | candidates={candidates.Count}");
             return PdfOcrResult.Ok(sourceFileName, pages, candidates);
         }
         catch (OperationCanceledException)
         {
-            return PdfOcrResult.Fail(sourceFileName, "OCR 분석이 취소되었습니다.");
+            return FailWithLog(sourceFileName, "OCR 분석이 취소되었습니다.");
         }
         catch (Exception ex)
         {
-            return PdfOcrResult.Fail(sourceFileName, $"OCR 처리 중 오류: {ex.Message}");
+            return FailWithLog(sourceFileName, $"OCR 처리 중 오류: {ex.Message}", ex);
         }
         finally
         {

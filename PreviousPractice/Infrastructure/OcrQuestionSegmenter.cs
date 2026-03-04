@@ -7,6 +7,7 @@ namespace PreviousPractice.Infrastructure;
 public static class OcrQuestionSegmenter
 {
     private const int FallbackLinesPerQuestion = 10;
+    private const int CandidateLogLimit = 20;
     private static readonly Regex SingleLineHeaderRegex = new(
         @"^\s*(?:[Qq]\s*)?(?:(?:제|문항|문제)\s*)?(?<index>\d{1,3}|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|[가-하]|[A-Za-z])\s*(?:[.)\]\-:：]|\s|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -15,6 +16,7 @@ public static class OcrQuestionSegmenter
     {
         if (pages.Count == 0)
         {
+            AppLog.Error(nameof(OcrQuestionSegmenter), "분할 중단 | pages=0");
             return Array.Empty<OcrQuestionCandidate>();
         }
 
@@ -34,9 +36,15 @@ public static class OcrQuestionSegmenter
 
         if (lines.Count == 0)
         {
+            AppLog.Error(
+                nameof(OcrQuestionSegmenter),
+                $"분할 중단 | pages={pages.Count} | normalizedLines=0");
             return Array.Empty<OcrQuestionCandidate>();
         }
 
+        var headerRegexMatchCount = 0;
+        var normalizedIndexMatchCount = 0;
+        var duplicateIndexCount = 0;
         var candidates = new List<OcrQuestionCandidate>();
         OcrQuestionCandidate? current = null;
         var currentBuffer = new StringBuilder();
@@ -47,8 +55,14 @@ public static class OcrQuestionSegmenter
             var (pageIndex, line) = lines[i];
 
             var match = SingleLineHeaderRegex.Match(line);
+            if (match.Success)
+            {
+                headerRegexMatchCount++;
+            }
+
             if (match.Success && TryNormalizeQuestionIndex(match.Groups["index"].Value, out var index))
             {
+                normalizedIndexMatchCount++;
                 if (current is not null)
                 {
                     candidates.Add(FinalizeCurrent(current, currentBuffer, i == lines.Count - 1));
@@ -67,6 +81,7 @@ public static class OcrQuestionSegmenter
                 else
                 {
                     // 같은 번호가 반복으로 들어오면 새 질문으로 간주하지 않는다.
+                    duplicateIndexCount++;
                     current = null;
                     currentBuffer.Clear();
                 }
@@ -87,7 +102,12 @@ public static class OcrQuestionSegmenter
 
         if (candidates.Count == 0)
         {
-            return SplitByHeuristic(lines);
+            var fallback = SplitByHeuristic(lines);
+            AppLog.Info(
+                nameof(OcrQuestionSegmenter),
+                $"분할 결과(휴리스틱) | pages={pages.Count} | lines={lines.Count} | regexMatch={headerRegexMatchCount} | normalized={normalizedIndexMatchCount} | duplicates={duplicateIndexCount} | candidates={fallback.Count}");
+            LogCandidateSummary("heuristic", fallback);
+            return fallback;
         }
 
         for (var i = 0; i < candidates.Count; i++)
@@ -101,6 +121,10 @@ public static class OcrQuestionSegmenter
             candidates[i] = candidates[i] with { EndPage = candidates[i + 1].StartPage };
         }
 
+        AppLog.Info(
+            nameof(OcrQuestionSegmenter),
+            $"분할 결과(헤더) | pages={pages.Count} | lines={lines.Count} | regexMatch={headerRegexMatchCount} | normalized={normalizedIndexMatchCount} | duplicates={duplicateIndexCount} | candidates={candidates.Count}");
+        LogCandidateSummary("header", candidates);
         return candidates;
     }
 
@@ -199,5 +223,24 @@ public static class OcrQuestionSegmenter
         }
 
         return false;
+    }
+
+    private static void LogCandidateSummary(string mode, IReadOnlyList<OcrQuestionCandidate> candidates)
+    {
+        if (candidates.Count == 0)
+        {
+            AppLog.Error(nameof(OcrQuestionSegmenter), $"후보 요약 없음 | mode={mode}");
+            return;
+        }
+
+        var summary = candidates
+            .Take(CandidateLogLimit)
+            .Select(x =>
+                $"{x.Index}@p{x.StartPage}-{x.EndPage}:{TrimToLength(x.Header, 50)}")
+            .ToArray();
+
+        AppLog.Info(
+            nameof(OcrQuestionSegmenter),
+            $"후보 요약 | mode={mode} | count={candidates.Count} | top={string.Join(" || ", summary)}");
     }
 }

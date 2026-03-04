@@ -5,7 +5,8 @@ public sealed record OcrPageResult
     int PageIndex,
     string Text,
     int WordCount,
-    float AverageWordConfidence
+    float AverageWordConfidence,
+    string? ImagePath = null
 );
 
 public sealed class PdfOcrResult

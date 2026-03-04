@@ -241,7 +241,8 @@ public sealed class PracticeRepository : IPracticeRepository
                         : incoming.Prompt.Trim(),
                     Type = incoming.Type,
                     Choices = incoming.Choices,
-                    CorrectAnswers = incoming.CorrectAnswers
+                    CorrectAnswers = incoming.CorrectAnswers,
+                    ImagePath = incoming.ImagePath
                 };
 
                 if (string.IsNullOrWhiteSpace(question.Prompt))
@@ -264,6 +265,11 @@ public sealed class PracticeRepository : IPracticeRepository
                     if (!string.IsNullOrWhiteSpace(question.Prompt))
                     {
                         existing.Prompt = question.Prompt;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(question.ImagePath))
+                    {
+                        existing.ImagePath = question.ImagePath;
                     }
 
                     if (updateExistingCorrectAnswers && question.CorrectAnswers.Length > 0)

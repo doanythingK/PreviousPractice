@@ -97,8 +97,21 @@
                         <VerticalStackLayout Spacing="6">
                             <Label Text="진행" />
                             <Label Text="{Binding ProgressDisplay}" />
-                            <Label Text="{Binding CurrentQuestionText}" FontAttributes="Bold" />
-                            <Label Text="{Binding CurrentQuestionChoicesText}" />
+                            <Label
+                                Text="{Binding CurrentQuestionText}"
+                                FontAttributes="Bold"
+                                FontSize="18"
+                                IsVisible="{Binding ShowCurrentQuestionText}" />
+                            <Image
+                                Source="{Binding CurrentQuestionImage}"
+                                HeightRequest="260"
+                                WidthRequest="320"
+                                HorizontalOptions="Start"
+                                Aspect="AspectFit"
+                                IsVisible="{Binding HasCurrentQuestionImage}" />
+                            <Label
+                                Text="{Binding CurrentQuestionChoicesText}"
+                                IsVisible="{Binding ShowCurrentQuestionText}" />
                             <Entry Placeholder="답 입력" Text="{Binding UserAnswer}" />
                             <Button Text="채점" Command="{Binding SubmitAnswerCommand}" />
                             <Label Text="{Binding SessionFeedback}" />
