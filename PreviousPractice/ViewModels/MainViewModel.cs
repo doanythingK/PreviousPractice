@@ -40,6 +40,8 @@ public class MainViewModel : ViewModelBase
     private Category? selectedCategory;
     private Question? currentQuestion;
     private ImageSource? currentQuestionImage;
+    private double currentQuestionImageContentHeight = DefaultQuestionImageViewportHeight;
+    private double currentQuestionImageTranslationY;
     private int sessionCount;
     private int currentIndex;
     private int correctCount;
@@ -49,6 +51,8 @@ public class MainViewModel : ViewModelBase
     private bool includeUnansweredInPractice = true;
     private string selectedSourceFileName = string.Empty;
     private IReadOnlyList<Question> currentSession = Array.Empty<Question>();
+    private const double DefaultQuestionImageViewportHeight = 260d;
+    private const double MinQuestionImageSliceRatio = 0.02d;
 
     public ObservableCollection<Category> Categories { get; } = new();
     public ObservableCollection<SourceFileSummary> SourceFiles { get; } = new();
@@ -334,6 +338,20 @@ public class MainViewModel : ViewModelBase
         private set => SetProperty(ref currentQuestionImage, value);
     }
 
+    public double CurrentQuestionImageViewportHeight => DefaultQuestionImageViewportHeight;
+
+    public double CurrentQuestionImageContentHeight
+    {
+        get => currentQuestionImageContentHeight;
+        private set => SetProperty(ref currentQuestionImageContentHeight, value);
+    }
+
+    public double CurrentQuestionImageTranslationY
+    {
+        get => currentQuestionImageTranslationY;
+        private set => SetProperty(ref currentQuestionImageTranslationY, value);
+    }
+
     public bool HasCurrentQuestionImage => CurrentQuestionImage != null;
 
     public bool ShowCurrentQuestionText => !HasCurrentQuestionImage;
@@ -556,6 +574,7 @@ public class MainViewModel : ViewModelBase
                     var questionImagePath = matchedCandidate == null
                         ? null
                         : analysis.Pages.FirstOrDefault(p => p.PageIndex == matchedCandidate.StartPage)?.ImagePath;
+                    var (imageTopRatio, imageBottomRatio) = ResolveImageRatios(matchedCandidate);
 
                     var question = new Question
                     {
@@ -569,7 +588,9 @@ public class MainViewModel : ViewModelBase
                             ? parsedQuestion.CorrectAnswers
                             : Array.Empty<string>(),
                         Choices = Array.Empty<string>(),
-                        ImagePath = questionImagePath
+                        ImagePath = questionImagePath,
+                        ImageTopRatio = imageTopRatio,
+                        ImageBottomRatio = imageBottomRatio
                     };
 
                     if (candidateByIndex.TryGetValue(x, out var candidate))
@@ -666,6 +687,27 @@ public class MainViewModel : ViewModelBase
             .ThenBy(x => x.Key)
             .FirstOrDefault()
             .Value;
+    }
+
+    private static (double Top, double Bottom) ResolveImageRatios(OcrQuestionCandidate? candidate)
+    {
+        if (candidate == null)
+        {
+            return (0d, 1d);
+        }
+
+        var totalLines = Math.Max(1, candidate.StartPageLineCount);
+        var startLine = Math.Clamp(candidate.StartLineInPage, 1, totalLines);
+        var endLine = Math.Clamp(candidate.EndLineInPage, startLine, totalLines);
+
+        var top = (double)(startLine - 1) / totalLines;
+        var bottom = (double)endLine / totalLines;
+        if (bottom - top < MinQuestionImageSliceRatio)
+        {
+            bottom = Math.Min(1d, top + MinQuestionImageSliceRatio);
+        }
+
+        return (Math.Clamp(top, 0d, 1d), Math.Clamp(bottom, 0d, 1d));
     }
 
     private void ClearPdfAnalysisState()
@@ -1025,6 +1067,7 @@ public class MainViewModel : ViewModelBase
             IsPracticeRunning = false;
             CurrentQuestion = null;
             CurrentQuestionImage = null;
+            UpdateCurrentQuestionImageViewport(null);
             OnPropertyChanged(nameof(CurrentQuestionText));
             OnPropertyChanged(nameof(CurrentQuestionChoicesText));
             OnPropertyChanged(nameof(HasCurrentQuestionImage));
@@ -1043,10 +1086,34 @@ public class MainViewModel : ViewModelBase
     {
         CurrentQuestion = question;
         CurrentQuestionImage = BuildQuestionImageSource(question?.ImagePath);
+        UpdateCurrentQuestionImageViewport(question);
         OnPropertyChanged(nameof(CurrentQuestionText));
         OnPropertyChanged(nameof(CurrentQuestionChoicesText));
         OnPropertyChanged(nameof(HasCurrentQuestionImage));
         OnPropertyChanged(nameof(ShowCurrentQuestionText));
+    }
+
+    private void UpdateCurrentQuestionImageViewport(Question? question)
+    {
+        if (question == null || string.IsNullOrWhiteSpace(question.ImagePath))
+        {
+            CurrentQuestionImageContentHeight = DefaultQuestionImageViewportHeight;
+            CurrentQuestionImageTranslationY = 0d;
+            return;
+        }
+
+        var top = Math.Clamp(question.ImageTopRatio, 0d, 1d);
+        var bottom = Math.Clamp(question.ImageBottomRatio, 0d, 1d);
+        if (bottom <= top)
+        {
+            bottom = Math.Min(1d, top + MinQuestionImageSliceRatio);
+        }
+
+        var visibleRatio = Math.Max(MinQuestionImageSliceRatio, bottom - top);
+        var contentHeight = DefaultQuestionImageViewportHeight / visibleRatio;
+
+        CurrentQuestionImageContentHeight = contentHeight;
+        CurrentQuestionImageTranslationY = -top * contentHeight;
     }
 
     private static ImageSource? BuildQuestionImageSource(string? imagePath)

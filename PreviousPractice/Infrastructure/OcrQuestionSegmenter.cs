@@ -8,6 +8,10 @@ public static class OcrQuestionSegmenter
 {
     private const int FallbackLinesPerQuestion = 10;
     private const int CandidateLogLimit = 20;
+    // OCR이 페이지를 한 줄로 뭉개는 경우, " 1. ", " 2) " 같은 번호 앞에 강제로 줄바꿈을 삽입한다.
+    private static readonly Regex SyntheticQuestionBreakRegex = new(
+        @"(?<=\s)(?<header>(?:[1-9]|[1-9]\d)\s*[.)])(?=\s)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SingleLineHeaderRegex = new(
         @"^\s*(?:[Qq]\s*)?(?:(?:제|문항|문제)\s*)?(?<index>\d{1,3}|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|[가-하]|[A-Za-z])\s*(?:[.)\]\-:：]|\s|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -20,18 +24,30 @@ public static class OcrQuestionSegmenter
             return Array.Empty<OcrQuestionCandidate>();
         }
 
-        var lines = new List<(int pageIndex, string line)>();
+        var lines = new List<ParsedLine>();
+        var pageLineCounts = new Dictionary<int, int>();
+        var syntheticBreakCount = 0;
+
         for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
         {
-            var pageText = pages[pageIndex].Text;
+            var pageNumber = pageIndex + 1;
+            var pageText = ExpandSyntheticLineBreaks(pages[pageIndex].Text, out var insertedBreaks);
+            syntheticBreakCount += insertedBreaks;
+
+            var lineInPage = 0;
             foreach (var rawLine in pageText.Split('\n'))
             {
                 var normalized = rawLine.Replace('\r', ' ').Trim();
-                if (!string.IsNullOrWhiteSpace(normalized))
+                if (string.IsNullOrWhiteSpace(normalized))
                 {
-                    lines.Add((pageIndex + 1, normalized));
+                    continue;
                 }
+
+                lineInPage++;
+                lines.Add(new ParsedLine(pageNumber, lineInPage, normalized));
             }
+
+            pageLineCounts[pageNumber] = lineInPage;
         }
 
         if (lines.Count == 0)
@@ -52,9 +68,8 @@ public static class OcrQuestionSegmenter
 
         for (var i = 0; i < lines.Count; i++)
         {
-            var (pageIndex, line) = lines[i];
-
-            var match = SingleLineHeaderRegex.Match(line);
+            var line = lines[i];
+            var match = SingleLineHeaderRegex.Match(line.Text);
             if (match.Success)
             {
                 headerRegexMatchCount++;
@@ -65,7 +80,7 @@ public static class OcrQuestionSegmenter
                 normalizedIndexMatchCount++;
                 if (current is not null)
                 {
-                    candidates.Add(FinalizeCurrent(current, currentBuffer, i == lines.Count - 1));
+                    candidates.Add(FinalizeCurrent(current, currentBuffer));
                 }
 
                 if (seenIndex.Add(index))
@@ -73,8 +88,12 @@ public static class OcrQuestionSegmenter
                     current = new OcrQuestionCandidate
                     {
                         Index = index,
-                        Header = line,
-                        StartPage = pageIndex
+                        Header = line.Text,
+                        StartPage = line.PageIndex,
+                        EndPage = line.PageIndex,
+                        StartLineInPage = line.LineInPage,
+                        EndLineInPage = line.LineInPage,
+                        StartPageLineCount = GetPageLineCount(pageLineCounts, line.PageIndex)
                     };
                     currentBuffer.Clear();
                 }
@@ -91,52 +110,43 @@ public static class OcrQuestionSegmenter
 
             if (current != null)
             {
-                currentBuffer.AppendLine(line);
+                currentBuffer.AppendLine(line.Text);
             }
         }
 
         if (current is not null)
         {
-            candidates.Add(FinalizeCurrent(current, currentBuffer, true));
+            candidates.Add(FinalizeCurrent(current, currentBuffer));
         }
 
         if (candidates.Count == 0)
         {
-            var fallback = SplitByHeuristic(lines);
+            var fallback = SplitByHeuristic(lines, pageLineCounts);
             AppLog.Info(
                 nameof(OcrQuestionSegmenter),
-                $"분할 결과(휴리스틱) | pages={pages.Count} | lines={lines.Count} | regexMatch={headerRegexMatchCount} | normalized={normalizedIndexMatchCount} | duplicates={duplicateIndexCount} | candidates={fallback.Count}");
+                $"분할 결과(휴리스틱) | pages={pages.Count} | lines={lines.Count} | syntheticBreaks={syntheticBreakCount} | regexMatch={headerRegexMatchCount} | normalized={normalizedIndexMatchCount} | duplicates={duplicateIndexCount} | candidates={fallback.Count}");
             LogCandidateSummary("heuristic", fallback);
             return fallback;
         }
 
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            if (i == candidates.Count - 1)
-            {
-                candidates[i] = candidates[i] with { EndPage = pages.Count };
-                continue;
-            }
-
-            candidates[i] = candidates[i] with { EndPage = candidates[i + 1].StartPage };
-        }
-
+        var resolved = ApplyRanges(candidates, pageLineCounts, pages.Count);
         AppLog.Info(
             nameof(OcrQuestionSegmenter),
-            $"분할 결과(헤더) | pages={pages.Count} | lines={lines.Count} | regexMatch={headerRegexMatchCount} | normalized={normalizedIndexMatchCount} | duplicates={duplicateIndexCount} | candidates={candidates.Count}");
-        LogCandidateSummary("header", candidates);
-        return candidates;
+            $"분할 결과(헤더) | pages={pages.Count} | lines={lines.Count} | syntheticBreaks={syntheticBreakCount} | regexMatch={headerRegexMatchCount} | normalized={normalizedIndexMatchCount} | duplicates={duplicateIndexCount} | candidates={resolved.Count}");
+        LogCandidateSummary("header", resolved);
+        return resolved;
     }
 
     private static IReadOnlyList<OcrQuestionCandidate> SplitByHeuristic(
-        IReadOnlyList<(int pageIndex, string line)> lines)
+        IReadOnlyList<ParsedLine> lines,
+        IReadOnlyDictionary<int, int> pageLineCounts)
     {
         if (lines.Count == 0)
         {
             return Array.Empty<OcrQuestionCandidate>();
         }
 
-        var candidates = new List<OcrQuestionCandidate>();
+        var roughCandidates = new List<OcrQuestionCandidate>();
         var index = 1;
         var chunkSize = Math.Max(1, FallbackLinesPerQuestion);
 
@@ -149,31 +159,73 @@ public static class OcrQuestionSegmenter
                 continue;
             }
 
-            var preview = TrimToLength(string.Join(" ", chunk.Select(x => x.line)), 150);
-            candidates.Add(new OcrQuestionCandidate
+            var preview = TrimToLength(string.Join(" ", chunk.Select(x => x.Text)), 150);
+            roughCandidates.Add(new OcrQuestionCandidate
             {
                 Index = index,
                 Header = $"[추정] 문항 {index}",
-                StartPage = chunk[0].pageIndex,
-                EndPage = chunk[^1].pageIndex,
+                StartPage = chunk[0].PageIndex,
+                EndPage = chunk[^1].PageIndex,
+                StartLineInPage = chunk[0].LineInPage,
+                EndLineInPage = chunk[^1].LineInPage,
+                StartPageLineCount = GetPageLineCount(pageLineCounts, chunk[0].PageIndex),
                 PreviewText = preview
             });
 
             index++;
         }
 
-        return candidates;
+        return ApplyRanges(roughCandidates, pageLineCounts, lines.Max(x => x.PageIndex));
+    }
+
+    private static IReadOnlyList<OcrQuestionCandidate> ApplyRanges(
+        IReadOnlyList<OcrQuestionCandidate> candidates,
+        IReadOnlyDictionary<int, int> pageLineCounts,
+        int totalPages)
+    {
+        var resolved = new List<OcrQuestionCandidate>(candidates.Count);
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var current = candidates[i];
+            var startPageLineCount = GetPageLineCount(pageLineCounts, current.StartPage);
+            var endPage = totalPages;
+            var endLineInPage = startPageLineCount;
+
+            if (i + 1 < candidates.Count)
+            {
+                var next = candidates[i + 1];
+                if (next.StartPage == current.StartPage)
+                {
+                    endPage = current.StartPage;
+                    endLineInPage = Math.Max(
+                        current.StartLineInPage,
+                        Math.Max(1, next.StartLineInPage - 1));
+                }
+                else
+                {
+                    endPage = next.StartPage;
+                    endLineInPage = startPageLineCount;
+                }
+            }
+
+            resolved.Add(current with
+            {
+                EndPage = endPage,
+                EndLineInPage = endLineInPage,
+                StartPageLineCount = startPageLineCount
+            });
+        }
+
+        return resolved;
     }
 
     private static OcrQuestionCandidate FinalizeCurrent(
         OcrQuestionCandidate current,
-        StringBuilder buffer,
-        bool isLast)
+        StringBuilder buffer)
     {
         var preview = (buffer.ToString() ?? string.Empty).Trim();
         return current with
         {
-            EndPage = isLast ? current.StartPage : current.EndPage,
             PreviewText = TrimToLength(preview, 150)
         };
     }
@@ -225,6 +277,35 @@ public static class OcrQuestionSegmenter
         return false;
     }
 
+    private static string ExpandSyntheticLineBreaks(string? text, out int insertedBreaks)
+    {
+        insertedBreaks = 0;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        var normalized = text.Replace("\r", "\n");
+        var breakCount = 0;
+        var expanded = SyntheticQuestionBreakRegex.Replace(
+            normalized,
+            match =>
+            {
+                breakCount++;
+                return "\n" + match.Groups["header"].Value;
+            });
+
+        insertedBreaks = breakCount;
+        return expanded;
+    }
+
+    private static int GetPageLineCount(IReadOnlyDictionary<int, int> pageLineCounts, int pageIndex)
+    {
+        return pageLineCounts.TryGetValue(pageIndex, out var count)
+            ? Math.Max(1, count)
+            : 1;
+    }
+
     private static void LogCandidateSummary(string mode, IReadOnlyList<OcrQuestionCandidate> candidates)
     {
         if (candidates.Count == 0)
@@ -236,11 +317,13 @@ public static class OcrQuestionSegmenter
         var summary = candidates
             .Take(CandidateLogLimit)
             .Select(x =>
-                $"{x.Index}@p{x.StartPage}-{x.EndPage}:{TrimToLength(x.Header, 50)}")
+                $"{x.Index}@p{x.StartPage}:{x.StartLineInPage}-{x.EndLineInPage}/{x.StartPageLineCount}:{TrimToLength(x.Header, 40)}")
             .ToArray();
 
         AppLog.Info(
             nameof(OcrQuestionSegmenter),
             $"후보 요약 | mode={mode} | count={candidates.Count} | top={string.Join(" || ", summary)}");
     }
+
+    private readonly record struct ParsedLine(int PageIndex, int LineInPage, string Text);
 }

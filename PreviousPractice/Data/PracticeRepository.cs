@@ -242,7 +242,9 @@ public sealed class PracticeRepository : IPracticeRepository
                     Type = incoming.Type,
                     Choices = incoming.Choices,
                     CorrectAnswers = incoming.CorrectAnswers,
-                    ImagePath = incoming.ImagePath
+                    ImagePath = incoming.ImagePath,
+                    ImageTopRatio = incoming.ImageTopRatio,
+                    ImageBottomRatio = incoming.ImageBottomRatio
                 };
 
                 if (string.IsNullOrWhiteSpace(question.Prompt))
@@ -271,6 +273,9 @@ public sealed class PracticeRepository : IPracticeRepository
                     {
                         existing.ImagePath = question.ImagePath;
                     }
+
+                    existing.ImageTopRatio = question.ImageTopRatio;
+                    existing.ImageBottomRatio = question.ImageBottomRatio;
 
                     if (updateExistingCorrectAnswers && question.CorrectAnswers.Length > 0)
                     {

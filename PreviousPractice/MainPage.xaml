@@ -102,13 +102,21 @@
                                 FontAttributes="Bold"
                                 FontSize="18"
                                 IsVisible="{Binding ShowCurrentQuestionText}" />
-                            <Image
-                                Source="{Binding CurrentQuestionImage}"
-                                HeightRequest="260"
+                            <Grid
                                 WidthRequest="320"
+                                HeightRequest="{Binding CurrentQuestionImageViewportHeight}"
+                                IsClippedToBounds="True"
                                 HorizontalOptions="Start"
-                                Aspect="AspectFit"
-                                IsVisible="{Binding HasCurrentQuestionImage}" />
+                                IsVisible="{Binding HasCurrentQuestionImage}">
+                                <Image
+                                    Source="{Binding CurrentQuestionImage}"
+                                    WidthRequest="320"
+                                    HeightRequest="{Binding CurrentQuestionImageContentHeight}"
+                                    TranslationY="{Binding CurrentQuestionImageTranslationY}"
+                                    HorizontalOptions="Start"
+                                    VerticalOptions="Start"
+                                    Aspect="Fill" />
+                            </Grid>
                             <Label
                                 Text="{Binding CurrentQuestionChoicesText}"
                                 IsVisible="{Binding ShowCurrentQuestionText}" />

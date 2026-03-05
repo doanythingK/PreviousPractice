@@ -11,6 +11,8 @@ public class Question
     public string[] Choices { get; set; } = Array.Empty<string>();
     public string[] CorrectAnswers { get; set; } = Array.Empty<string>();
     public string? ImagePath { get; set; }
+    public double ImageTopRatio { get; set; }
+    public double ImageBottomRatio { get; set; } = 1d;
 
     public string CorrectAnswerDisplay => string.Join(", ", CorrectAnswers);
 }
