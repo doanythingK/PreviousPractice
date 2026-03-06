@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using System.Buffers.Binary;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using PreviousPractice.Core;
 using PreviousPractice.Data;
@@ -8,6 +10,7 @@ using PreviousPractice.Models;
 using PreviousPractice.Services;
 using Microsoft.Maui.Storage;
 using Microsoft.Maui.Graphics;
+using Microsoft.Maui.Devices;
 
 namespace PreviousPractice.ViewModels;
 
@@ -22,6 +25,7 @@ public class MainViewModel : ViewModelBase
     private readonly string sourceAnalysisDirectory;
     private string newCategoryName = string.Empty;
     private string answerMapText = string.Empty;
+    private string expectedQuestionRangeText = string.Empty;
     private string pdfAnalysisSummary = string.Empty;
     private string pdfAnalysisStatus = string.Empty;
     private Color pdfAnalysisStatusColor = Color.FromArgb("#334155");
@@ -39,9 +43,6 @@ public class MainViewModel : ViewModelBase
     private bool overwriteExisting;
     private Category? selectedCategory;
     private Question? currentQuestion;
-    private ImageSource? currentQuestionImage;
-    private double currentQuestionImageContentHeight = DefaultQuestionImageViewportHeight;
-    private double currentQuestionImageTranslationY;
     private int sessionCount;
     private int currentIndex;
     private int correctCount;
@@ -51,13 +52,21 @@ public class MainViewModel : ViewModelBase
     private bool includeUnansweredInPractice = true;
     private string selectedSourceFileName = string.Empty;
     private IReadOnlyList<Question> currentSession = Array.Empty<Question>();
-    private const double DefaultQuestionImageViewportHeight = 260d;
+    private const double PhoneQuestionImageViewportWidth = 320d;
+    private const double PhoneQuestionImageViewportHeight = 260d;
+    private const double TabletQuestionImageViewportWidth = 560d;
+    private const double TabletQuestionImageViewportHeight = 440d;
+    private const double DesktopQuestionImageViewportWidth = 760d;
+    private const double DesktopQuestionImageViewportHeight = 620d;
     private const double MinQuestionImageSliceRatio = 0.02d;
+    private const double MinQuestionImageSliceWidthRatio = 0.08d;
+    private const double QuestionImageCropPaddingRatio = 0.015d;
 
     public ObservableCollection<Category> Categories { get; } = new();
     public ObservableCollection<SourceFileSummary> SourceFiles { get; } = new();
     public ObservableCollection<Question> WrongQuestions { get; } = new();
     public ObservableCollection<string> SourceFilesDirectory { get; } = new();
+    public ObservableCollection<QuestionImageSliceViewModel> CurrentQuestionImageSlices { get; } = new();
 
     public string PdfAnalysisSummary
     {
@@ -165,6 +174,12 @@ public class MainViewModel : ViewModelBase
                 OnPropertyChanged(nameof(CanImportAnswerMap));
             }
         }
+    }
+
+    public string ExpectedQuestionRangeText
+    {
+        get => expectedQuestionRangeText;
+        set => SetProperty(ref expectedQuestionRangeText, value);
     }
 
     public string PracticeCountText
@@ -332,29 +347,67 @@ public class MainViewModel : ViewModelBase
 
     public string CurrentQuestionText => CurrentQuestion?.Prompt ?? string.Empty;
 
-    public ImageSource? CurrentQuestionImage
+    public string CurrentQuestionSourceDisplay
     {
-        get => currentQuestionImage;
-        private set => SetProperty(ref currentQuestionImage, value);
+        get
+        {
+            if (CurrentQuestion == null)
+            {
+                return string.Empty;
+            }
+
+            var sourceFileName = string.IsNullOrWhiteSpace(CurrentQuestion.SourceFileName)
+                ? "파일 정보 없음"
+                : Path.GetFileName(CurrentQuestion.SourceFileName);
+            var questionIndexText = CurrentQuestion.Index > 0
+                ? $"{CurrentQuestion.Index}번 문제"
+                : "문항 번호 없음";
+
+            return $"파일: {sourceFileName} / {questionIndexText}";
+        }
     }
 
-    public double CurrentQuestionImageViewportHeight => DefaultQuestionImageViewportHeight;
-
-    public double CurrentQuestionImageContentHeight
+    public double CurrentQuestionImageViewportWidth
     {
-        get => currentQuestionImageContentHeight;
-        private set => SetProperty(ref currentQuestionImageContentHeight, value);
+        get
+        {
+            var idiom = DeviceInfo.Idiom;
+            if (idiom == DeviceIdiom.Desktop)
+            {
+                return DesktopQuestionImageViewportWidth;
+            }
+
+            if (idiom == DeviceIdiom.Tablet)
+            {
+                return TabletQuestionImageViewportWidth;
+            }
+
+            return PhoneQuestionImageViewportWidth;
+        }
     }
 
-    public double CurrentQuestionImageTranslationY
+    public double CurrentQuestionImageViewportHeight
     {
-        get => currentQuestionImageTranslationY;
-        private set => SetProperty(ref currentQuestionImageTranslationY, value);
+        get
+        {
+            var idiom = DeviceInfo.Idiom;
+            if (idiom == DeviceIdiom.Desktop)
+            {
+                return DesktopQuestionImageViewportHeight;
+            }
+
+            if (idiom == DeviceIdiom.Tablet)
+            {
+                return TabletQuestionImageViewportHeight;
+            }
+
+            return PhoneQuestionImageViewportHeight;
+        }
     }
 
-    public bool HasCurrentQuestionImage => CurrentQuestionImage != null;
+    public bool HasCurrentQuestionImages => CurrentQuestionImageSlices.Count > 0;
 
-    public bool ShowCurrentQuestionText => !HasCurrentQuestionImage;
+    public bool ShowCurrentQuestionText => !HasCurrentQuestionImages;
 
     public string CurrentQuestionChoicesText => CurrentQuestion is null || CurrentQuestion.Choices.Length == 0
         ? string.Empty
@@ -396,7 +449,7 @@ public class MainViewModel : ViewModelBase
         LoadSourceFilesFromDirectoryCommand = new RelayCommand(async void () => await LoadSourceFilesFromDirectoryAsync());
         ImportSourceFileCommand = new RelayCommand(async void () => await ImportSourceFileAsync());
 
-        _ = LoadAsync();
+        _ = InitializeAsync();
     }
 
     private static Action<Guid?> GuidFromObject(Func<Guid, Task> action)
@@ -408,6 +461,19 @@ public class MainViewModel : ViewModelBase
                 _ = action(parameter.Value);
             }
         };
+    }
+
+    private async Task InitializeAsync()
+    {
+        try
+        {
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"초기 데이터를 불러오지 못했습니다: {ex.Message}";
+            AppLog.Error(nameof(MainViewModel), "초기화 실패", ex);
+        }
     }
 
     private async Task LoadAsync()
@@ -462,6 +528,15 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
+        if (!TryParseExpectedQuestionRange(
+                ExpectedQuestionRangeText,
+                out var expectedQuestionRange,
+                out var expectedQuestionRangeError))
+        {
+            Feedback = expectedQuestionRangeError;
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(SelectedSourceFileName))
         {
             Feedback = "문항 파일을 먼저 선택해 주세요.";
@@ -494,7 +569,7 @@ public class MainViewModel : ViewModelBase
         try
         {
             var progress = new Progress<PdfAnalysisProgress>(UpdatePdfAnalysisProgress);
-            var analysis = await pdfAnalysisService.AnalyzePdfAsync(sourceFilePath, progress);
+            var analysis = await pdfAnalysisService.AnalyzePdfAsync(sourceFilePath, progress, expectedQuestionRange);
             if (!analysis.IsSuccess)
             {
                 PdfAnalysisSummary = $"문항 분석 실패: {analysis.Message}";
@@ -517,9 +592,24 @@ public class MainViewModel : ViewModelBase
                 "문항 데이터 저장 중"));
 
             await SavePdfAnalysisAsync(normalizedSourceFileName, analysis);
-            PdfAnalysisSummary = BuildAnalysisSummary(analysis);
+            var diagnostics = BuildPdfAnalysisDiagnostics(normalizedSourceFileName, analysis, expectedQuestionRange);
+            var diagnosticsPath = await SavePdfAnalysisDiagnosticsAsync(normalizedSourceFileName, diagnostics);
+            PdfAnalysisSummary = BuildAnalysisSummary(analysis, diagnostics);
             PdfAnalysisStatus = "문항 분석이 완료되었습니다.";
             PdfAnalysisStatusColor = Color.FromArgb("#16A34A");
+
+            if (diagnostics.HasExpectedQuestionMismatch)
+            {
+                var mismatchSummary = BuildExpectedQuestionMismatchSummary(diagnostics);
+                PdfAnalysisStatus = "예상 문항 범위와 분석 결과가 일치하지 않습니다.";
+                PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
+                Feedback = $"{mismatchSummary}\n문항 반영을 중단했습니다." +
+                           (string.IsNullOrWhiteSpace(diagnosticsPath) ? string.Empty : $"\n진단 파일: {diagnosticsPath}");
+                AppLog.Error(
+                    nameof(MainViewModel),
+                    $"문항 반영 중단 | expectedRange={diagnostics.ExpectedQuestionRange?.ToString() ?? "n/a"} | detected={diagnostics.DistinctCandidateCount} | missing={string.Join(",", diagnostics.MissingIndexes)} | unexpected={string.Join(",", diagnostics.UnexpectedIndexes)} | duplicates={string.Join(",", diagnostics.DuplicateIndexes.Select(x => x.Index))} | diag={diagnosticsPath ?? "n/a"}");
+                return;
+            }
 
             var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText);
             if (!analysis.HasQuestionCandidates && result.IsEmpty)
@@ -570,11 +660,12 @@ public class MainViewModel : ViewModelBase
                 .Select(x =>
                 {
                     var hasAnswer = answerByIndex.TryGetValue(x, out var parsedQuestion);
-                    var matchedCandidate = ResolveQuestionCandidate(candidateByIndex, x);
-                    var questionImagePath = matchedCandidate == null
-                        ? null
-                        : analysis.Pages.FirstOrDefault(p => p.PageIndex == matchedCandidate.StartPage)?.ImagePath;
-                    var (imageTopRatio, imageBottomRatio) = ResolveImageRatios(matchedCandidate);
+                    candidateByIndex.TryGetValue(x, out var matchedCandidate);
+                    var imageSegments = BuildQuestionImageSegments(
+                        matchedCandidate,
+                        analysis.QuestionCandidates,
+                        analysis.Pages);
+                    var primaryImageSegment = imageSegments.FirstOrDefault();
 
                     var question = new Question
                     {
@@ -588,9 +679,10 @@ public class MainViewModel : ViewModelBase
                             ? parsedQuestion.CorrectAnswers
                             : Array.Empty<string>(),
                         Choices = Array.Empty<string>(),
-                        ImagePath = questionImagePath,
-                        ImageTopRatio = imageTopRatio,
-                        ImageBottomRatio = imageBottomRatio
+                        ImageSegments = imageSegments,
+                        ImagePath = primaryImageSegment?.ImagePath,
+                        ImageTopRatio = primaryImageSegment?.ImageTopRatio ?? 0d,
+                        ImageBottomRatio = primaryImageSegment?.ImageBottomRatio ?? 1d
                     };
 
                     if (candidateByIndex.TryGetValue(x, out var candidate))
@@ -630,7 +722,7 @@ public class MainViewModel : ViewModelBase
                 overwriteBySourceFile: shouldOverwrite,
                 updateExistingCorrectAnswers: true);
 
-            var mismatchMessage = BuildCandidateMismatchMessage(analysis, result);
+            var mismatchMessage = BuildCandidateMismatchMessage(analysis, result, questions);
             var summary = result.HasErrors || !string.IsNullOrWhiteSpace(mismatchMessage)
                 ? $"{questions.Length}개 저장"
                   + (!result.HasErrors ? string.Empty : $"(일부 파싱 오류: {string.Join(", ", result.Errors)})")
@@ -668,46 +760,260 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private static OcrQuestionCandidate? ResolveQuestionCandidate(
-        IReadOnlyDictionary<int, OcrQuestionCandidate> candidates,
-        int index)
+    private static QuestionImageSegment[] BuildQuestionImageSegments(
+        OcrQuestionCandidate? candidate,
+        IReadOnlyList<OcrQuestionCandidate> allCandidates,
+        IReadOnlyList<OcrPageResult> pages)
     {
-        if (candidates == null || candidates.Count == 0)
+        if (candidate == null || pages.Count == 0)
         {
-            return null;
+            return Array.Empty<QuestionImageSegment>();
         }
 
-        if (candidates.TryGetValue(index, out var candidate))
+        var pageByIndex = pages
+            .Where(x => !string.IsNullOrWhiteSpace(x.ImagePath))
+            .ToDictionary(x => x.PageIndex, x => x);
+
+        var segments = new List<QuestionImageSegment>();
+        for (var pageIndex = candidate.StartPage; pageIndex <= candidate.EndPage; pageIndex++)
         {
-            return candidate;
+            if (!pageByIndex.TryGetValue(pageIndex, out var page) || string.IsNullOrWhiteSpace(page.ImagePath))
+            {
+                continue;
+            }
+
+            var top = pageIndex == candidate.StartPage
+                ? ResolveTopImageRatio(candidate.StartLineInPage, candidate.StartPageLineCount)
+                : 0d;
+            var bottom = pageIndex == candidate.EndPage
+                ? ResolveBottomImageRatio(
+                    candidate.EndLineInPage,
+                    candidate.EndPageLineCount <= 0 ? candidate.StartPageLineCount : candidate.EndPageLineCount,
+                    top)
+                : 1d;
+            var left = 0d;
+            var right = 1d;
+
+            if (page.Lines != null && page.Lines.Count > 0)
+            {
+                var anchorLine = ResolveAnchorLine(candidate, pageIndex, pageByIndex);
+                if (anchorLine != null)
+                {
+                    var topBoundary = pageIndex == candidate.StartPage
+                        ? ClampRatio(anchorLine.TopRatio - QuestionImageCropPaddingRatio)
+                        : 0d;
+                    var nextHeaderTop = ResolveNextHeaderTopRatio(
+                        candidate,
+                        allCandidates,
+                        pageIndex,
+                        pageByIndex,
+                        anchorLine);
+                    var segmentLines = page.Lines
+                        .Where(x =>
+                            !string.IsNullOrWhiteSpace(x.Text) &&
+                            IsSameColumnLine(x, anchorLine) &&
+                            x.BottomRatio >= topBoundary &&
+                            (!nextHeaderTop.HasValue || x.TopRatio < nextHeaderTop.Value))
+                        .ToArray();
+
+                    if (segmentLines.Length > 0)
+                    {
+                        var horizontalCropLines = segmentLines
+                            .Where(x => IsHorizontalCropLine(x, anchorLine))
+                            .ToArray();
+                        var cropLines = horizontalCropLines.Length > 0
+                            ? horizontalCropLines
+                            : segmentLines;
+
+                        left = ClampRatio(cropLines.Min(x => x.LeftRatio) - QuestionImageCropPaddingRatio);
+                        top = ClampRatio(segmentLines.Min(x => x.TopRatio) - QuestionImageCropPaddingRatio);
+                        right = ClampRatio(cropLines.Max(x => x.RightRatio) + QuestionImageCropPaddingRatio);
+                        bottom = ClampRatio(segmentLines.Max(x => x.BottomRatio) + QuestionImageCropPaddingRatio);
+                    }
+                    else if (pageIndex != candidate.StartPage)
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    var segmentStartLine = pageIndex == candidate.StartPage ? candidate.StartLineInPage : 1;
+                    var segmentEndLine = pageIndex == candidate.EndPage
+                        ? candidate.EndLineInPage
+                        : page.Lines.Max(x => x.LineInPage);
+                    var segmentLines = page.Lines
+                        .Where(x => x.LineInPage >= segmentStartLine && x.LineInPage <= segmentEndLine)
+                        .ToArray();
+
+                    if (segmentLines.Length > 0)
+                    {
+                        left = ClampRatio(segmentLines.Min(x => x.LeftRatio) - QuestionImageCropPaddingRatio);
+                        top = ClampRatio(segmentLines.Min(x => x.TopRatio) - QuestionImageCropPaddingRatio);
+                        right = ClampRatio(segmentLines.Max(x => x.RightRatio) + QuestionImageCropPaddingRatio);
+                        bottom = ClampRatio(segmentLines.Max(x => x.BottomRatio) + QuestionImageCropPaddingRatio);
+                    }
+                }
+            }
+
+            right = EnsureMinimumSpan(left, right, MinQuestionImageSliceWidthRatio);
+            bottom = EnsureMinimumSpan(top, bottom, MinQuestionImageSliceRatio);
+
+            segments.Add(new QuestionImageSegment
+            {
+                PageIndex = pageIndex,
+                ImagePath = page.ImagePath,
+                ImageLeftRatio = left,
+                ImageTopRatio = top,
+                ImageRightRatio = right,
+                ImageBottomRatio = bottom,
+                ImagePixelWidth = page.ImagePixelWidth,
+                ImagePixelHeight = page.ImagePixelHeight
+            });
         }
 
-        return candidates
-            .OrderBy(x => Math.Abs(x.Key - index))
-            .ThenBy(x => x.Key)
-            .FirstOrDefault()
-            .Value;
+        return segments.ToArray();
     }
 
-    private static (double Top, double Bottom) ResolveImageRatios(OcrQuestionCandidate? candidate)
+    private static OcrLineResult? ResolveAnchorLine(
+        OcrQuestionCandidate candidate,
+        int pageIndex,
+        IReadOnlyDictionary<int, OcrPageResult> pageByIndex)
     {
-        if (candidate == null)
+        if (candidate.StartPage == pageIndex &&
+            TryGetLine(pageByIndex, pageIndex, candidate.StartLineInPage, out var startLine))
         {
-            return (0d, 1d);
+            return startLine;
         }
 
-        var totalLines = Math.Max(1, candidate.StartPageLineCount);
-        var startLine = Math.Clamp(candidate.StartLineInPage, 1, totalLines);
-        var endLine = Math.Clamp(candidate.EndLineInPage, startLine, totalLines);
+        if (candidate.StartPage != pageIndex &&
+            TryGetLine(pageByIndex, candidate.StartPage, candidate.StartLineInPage, out var originalAnchor))
+        {
+            return originalAnchor;
+        }
 
-        var top = (double)(startLine - 1) / totalLines;
-        var bottom = (double)endLine / totalLines;
+        return null;
+    }
+
+    private static bool TryGetLine(
+        IReadOnlyDictionary<int, OcrPageResult> pageByIndex,
+        int pageIndex,
+        int lineInPage,
+        out OcrLineResult? line)
+    {
+        line = null;
+        if (!pageByIndex.TryGetValue(pageIndex, out var page) || page.Lines == null)
+        {
+            return false;
+        }
+
+        line = page.Lines.FirstOrDefault(x => x.LineInPage == lineInPage);
+        return line != null;
+    }
+
+    private static double? ResolveNextHeaderTopRatio(
+        OcrQuestionCandidate currentCandidate,
+        IReadOnlyList<OcrQuestionCandidate> allCandidates,
+        int pageIndex,
+        IReadOnlyDictionary<int, OcrPageResult> pageByIndex,
+        OcrLineResult anchorLine)
+    {
+        foreach (var nextCandidate in allCandidates
+                     .Where(x =>
+                         x.Index != currentCandidate.Index &&
+                         x.StartPage == pageIndex &&
+                         (pageIndex != currentCandidate.StartPage || x.StartLineInPage > currentCandidate.StartLineInPage))
+                     .OrderBy(x => x.StartLineInPage))
+        {
+            if (!TryGetLine(pageByIndex, pageIndex, nextCandidate.StartLineInPage, out var nextHeader) || nextHeader == null)
+            {
+                continue;
+            }
+
+            if (IsSameColumnLine(nextHeader, anchorLine))
+            {
+                return ClampRatio(nextHeader.TopRatio - QuestionImageCropPaddingRatio);
+            }
+        }
+
+        return null;
+    }
+
+    private static bool IsHorizontalCropLine(OcrLineResult line, OcrLineResult anchorLine)
+    {
+        var anchorWidth = Math.Max(0d, anchorLine.RightRatio - anchorLine.LeftRatio);
+        if (anchorWidth >= 0.55d)
+        {
+            return true;
+        }
+
+        var anchorCenter = (anchorLine.LeftRatio + anchorLine.RightRatio) / 2d;
+        var lineCenter = (line.LeftRatio + line.RightRatio) / 2d;
+        if (Math.Abs(lineCenter - anchorCenter) <= 0.20d)
+        {
+            return true;
+        }
+
+        var expandedLeft = ClampRatio(anchorLine.LeftRatio - 0.08d);
+        var expandedRight = ClampRatio(anchorLine.RightRatio + 0.08d);
+        var overlap = Math.Min(line.RightRatio, expandedRight) - Math.Max(line.LeftRatio, expandedLeft);
+        return overlap >= 0.12d;
+    }
+
+    private static bool IsSameColumnLine(OcrLineResult line, OcrLineResult anchorLine)
+    {
+        if (IsHorizontalCropLine(line, anchorLine))
+        {
+            return true;
+        }
+
+        var anchorCenter = (anchorLine.LeftRatio + anchorLine.RightRatio) / 2d;
+        var expandedLeft = ClampRatio(anchorLine.LeftRatio - 0.08d);
+
+        // 우측 칼럼의 짧은 줄은 중심점이 중앙 쪽으로 치우쳐도 같은 문항인 경우가 있다.
+        if (anchorCenter >= 0.55d && line.LeftRatio >= expandedLeft)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static double ClampRatio(double value)
+    {
+        return Math.Clamp(value, 0d, 1d);
+    }
+
+    private static double EnsureMinimumSpan(double start, double end, double minimumSpan)
+    {
+        var clampedStart = ClampRatio(start);
+        var clampedEnd = ClampRatio(end);
+        if (clampedEnd - clampedStart >= minimumSpan)
+        {
+            return clampedEnd;
+        }
+
+        return Math.Min(1d, clampedStart + minimumSpan);
+    }
+
+    private static double ResolveTopImageRatio(int startLine, int totalLines)
+    {
+        var safeTotalLines = Math.Max(1, totalLines);
+        var clampedStartLine = Math.Clamp(startLine, 1, safeTotalLines);
+        return Math.Clamp((double)(clampedStartLine - 1) / safeTotalLines, 0d, 1d);
+    }
+
+    private static double ResolveBottomImageRatio(int endLine, int totalLines, double top)
+    {
+        var safeTotalLines = Math.Max(1, totalLines);
+        var minimumLine = Math.Max(1, (int)Math.Ceiling(top * safeTotalLines));
+        var clampedEndLine = Math.Clamp(endLine, minimumLine, safeTotalLines);
+        var bottom = (double)clampedEndLine / safeTotalLines;
         if (bottom - top < MinQuestionImageSliceRatio)
         {
             bottom = Math.Min(1d, top + MinQuestionImageSliceRatio);
         }
 
-        return (Math.Clamp(top, 0d, 1d), Math.Clamp(bottom, 0d, 1d));
+        return Math.Clamp(bottom, 0d, 1d);
     }
 
     private void ClearPdfAnalysisState()
@@ -909,6 +1215,37 @@ public class MainViewModel : ViewModelBase
         }
     }
 
+    private async Task<string?> SavePdfAnalysisDiagnosticsAsync(string sourceFileName, PdfAnalysisDiagnostics diagnostics)
+    {
+        try
+        {
+            Directory.CreateDirectory(sourceAnalysisDirectory);
+
+            var safeFileName = GetSafeFileNameWithoutExtension(sourceFileName);
+            var jsonPath = Path.Combine(sourceAnalysisDirectory, $"{safeFileName}.diagnostics.json");
+            var textPath = Path.Combine(sourceAnalysisDirectory, $"{safeFileName}.diagnostics.txt");
+
+            var json = JsonSerializer.Serialize(diagnostics, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+            await File.WriteAllTextAsync(jsonPath, json);
+            await File.WriteAllTextAsync(textPath, BuildDiagnosticsText(diagnostics));
+            AppLog.Info(
+                nameof(MainViewModel),
+                $"분석 진단 저장 완료 | file={sourceFileName} | json={jsonPath} | text={textPath}");
+            return jsonPath;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(
+                nameof(MainViewModel),
+                $"분석 진단 저장 실패 | file={sourceFileName}",
+                ex);
+            return null;
+        }
+    }
+
     private static string GetSafeFileNameWithoutExtension(string fileName)
     {
         var baseName = Path.GetFileNameWithoutExtension(fileName).Trim();
@@ -919,6 +1256,57 @@ public class MainViewModel : ViewModelBase
 
         var invalid = Path.GetInvalidFileNameChars();
         return new string(baseName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+    }
+
+    private static bool TryParseExpectedQuestionRange(
+        string? rawValue,
+        out QuestionNumberRange? expectedQuestionRange,
+        out string errorMessage)
+    {
+        expectedQuestionRange = null;
+        errorMessage = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return true;
+        }
+
+        var normalized = rawValue.Trim();
+        var separators = new[] { '-', '~', '〜' };
+        var separatorIndex = normalized.IndexOfAny(separators);
+
+        if (separatorIndex < 0)
+        {
+            if (!int.TryParse(normalized, out var count) || count <= 0)
+            {
+                errorMessage = "예상 문항 범위는 `25` 또는 `31-55` 형식으로 입력해 주세요.";
+                return false;
+            }
+
+            expectedQuestionRange = new QuestionNumberRange(1, count);
+            return true;
+        }
+
+        var startText = normalized[..separatorIndex].Trim();
+        var endText = normalized[(separatorIndex + 1)..].Trim();
+
+        if (!int.TryParse(startText, out var startIndex) ||
+            !int.TryParse(endText, out var endIndex) ||
+            startIndex <= 0 ||
+            endIndex <= 0)
+        {
+            errorMessage = "예상 문항 범위는 `25` 또는 `31-55` 형식으로 입력해 주세요.";
+            return false;
+        }
+
+        if (startIndex > endIndex)
+        {
+            errorMessage = "예상 문항 범위의 시작 번호는 끝 번호보다 클 수 없습니다.";
+            return false;
+        }
+
+        expectedQuestionRange = new QuestionNumberRange(startIndex, endIndex);
+        return true;
     }
 
     private static async Task<bool> ConfirmOverwriteImportAsync(string sourceFileName, int existingCount)
@@ -1066,11 +1454,11 @@ public class MainViewModel : ViewModelBase
         {
             IsPracticeRunning = false;
             CurrentQuestion = null;
-            CurrentQuestionImage = null;
-            UpdateCurrentQuestionImageViewport(null);
+            CurrentQuestionImageSlices.Clear();
+            OnPropertyChanged(nameof(CurrentQuestionSourceDisplay));
             OnPropertyChanged(nameof(CurrentQuestionText));
             OnPropertyChanged(nameof(CurrentQuestionChoicesText));
-            OnPropertyChanged(nameof(HasCurrentQuestionImage));
+            OnPropertyChanged(nameof(HasCurrentQuestionImages));
             OnPropertyChanged(nameof(ShowCurrentQuestionText));
             SessionFeedback += $"\n총 {CorrectCount}/{SessionTotalCount}개 정답";
             UpdatePracticeState();
@@ -1085,35 +1473,147 @@ public class MainViewModel : ViewModelBase
     private void SetCurrentQuestion(Question question)
     {
         CurrentQuestion = question;
-        CurrentQuestionImage = BuildQuestionImageSource(question?.ImagePath);
-        UpdateCurrentQuestionImageViewport(question);
+        UpdateCurrentQuestionImageSlices(question);
+        OnPropertyChanged(nameof(CurrentQuestionSourceDisplay));
         OnPropertyChanged(nameof(CurrentQuestionText));
         OnPropertyChanged(nameof(CurrentQuestionChoicesText));
-        OnPropertyChanged(nameof(HasCurrentQuestionImage));
+        OnPropertyChanged(nameof(HasCurrentQuestionImages));
         OnPropertyChanged(nameof(ShowCurrentQuestionText));
     }
 
-    private void UpdateCurrentQuestionImageViewport(Question? question)
+    private void UpdateCurrentQuestionImageSlices(Question? question)
     {
-        if (question == null || string.IsNullOrWhiteSpace(question.ImagePath))
+        CurrentQuestionImageSlices.Clear();
+        foreach (var slice in BuildQuestionImageSliceViewModels(question))
         {
-            CurrentQuestionImageContentHeight = DefaultQuestionImageViewportHeight;
-            CurrentQuestionImageTranslationY = 0d;
-            return;
+            CurrentQuestionImageSlices.Add(slice);
+        }
+    }
+
+    private IEnumerable<QuestionImageSliceViewModel> BuildQuestionImageSliceViewModels(Question? question)
+    {
+        if (question == null)
+        {
+            yield break;
         }
 
-        var top = Math.Clamp(question.ImageTopRatio, 0d, 1d);
-        var bottom = Math.Clamp(question.ImageBottomRatio, 0d, 1d);
-        if (bottom <= top)
+        foreach (var segment in ResolveStoredImageSegments(question))
         {
-            bottom = Math.Min(1d, top + MinQuestionImageSliceRatio);
+            var imageSource = BuildQuestionImageSource(segment.ImagePath);
+            if (imageSource == null)
+            {
+                continue;
+            }
+
+            var left = Math.Clamp(segment.ImageLeftRatio, 0d, 1d);
+            var top = Math.Clamp(segment.ImageTopRatio, 0d, 1d);
+            var right = Math.Clamp(segment.ImageRightRatio, 0d, 1d);
+            var bottom = Math.Clamp(segment.ImageBottomRatio, 0d, 1d);
+            if (right <= left)
+            {
+                right = Math.Min(1d, left + MinQuestionImageSliceWidthRatio);
+            }
+
+            if (bottom <= top)
+            {
+                bottom = Math.Min(1d, top + MinQuestionImageSliceRatio);
+            }
+
+            var contentWidth = CurrentQuestionImageViewportWidth;
+            var (imagePixelWidth, imagePixelHeight) = ResolveImagePixelSize(segment);
+            if (imagePixelWidth <= 0 || imagePixelHeight <= 0)
+            {
+                imagePixelWidth = contentWidth;
+                imagePixelHeight = CurrentQuestionImageViewportHeight;
+            }
+
+            var contentHeight = contentWidth * imagePixelHeight / imagePixelWidth;
+            var visibleWidth = Math.Max(contentWidth * MinQuestionImageSliceWidthRatio, (right - left) * contentWidth);
+            var visibleHeight = Math.Max(contentHeight * MinQuestionImageSliceRatio, (bottom - top) * contentHeight);
+
+            yield return new QuestionImageSliceViewModel
+            {
+                ImageSource = imageSource,
+                VisibleWidth = visibleWidth,
+                VisibleHeight = visibleHeight,
+                ContentWidth = contentWidth,
+                ContentHeight = contentHeight,
+                TranslationX = -left * contentWidth,
+                TranslationY = -top * contentHeight
+            };
+        }
+    }
+
+    private static (double Width, double Height) ResolveImagePixelSize(QuestionImageSegment segment)
+    {
+        if (segment.ImagePixelWidth > 0 && segment.ImagePixelHeight > 0)
+        {
+            return (segment.ImagePixelWidth, segment.ImagePixelHeight);
         }
 
-        var visibleRatio = Math.Max(MinQuestionImageSliceRatio, bottom - top);
-        var contentHeight = DefaultQuestionImageViewportHeight / visibleRatio;
+        return TryReadPngSize(segment.ImagePath, out var width, out var height)
+            ? (width, height)
+            : (0d, 0d);
+    }
 
-        CurrentQuestionImageContentHeight = contentHeight;
-        CurrentQuestionImageTranslationY = -top * contentHeight;
+    private static bool TryReadPngSize(string? imagePath, out int width, out int height)
+    {
+        width = 0;
+        height = 0;
+
+        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(imagePath);
+            Span<byte> header = stackalloc byte[24];
+            if (stream.Read(header) < header.Length)
+            {
+                return false;
+            }
+
+            Span<byte> pngSignature = stackalloc byte[] { 137, 80, 78, 71, 13, 10, 26, 10 };
+            if (!header[..8].SequenceEqual(pngSignature))
+            {
+                return false;
+            }
+
+            width = BinaryPrimitives.ReadInt32BigEndian(header.Slice(16, 4));
+            height = BinaryPrimitives.ReadInt32BigEndian(header.Slice(20, 4));
+            return width > 0 && height > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static IEnumerable<QuestionImageSegment> ResolveStoredImageSegments(Question question)
+    {
+        if (question.ImageSegments != null && question.ImageSegments.Length > 0)
+        {
+            return question.ImageSegments
+                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.ImagePath));
+        }
+
+        if (string.IsNullOrWhiteSpace(question.ImagePath))
+        {
+            return Array.Empty<QuestionImageSegment>();
+        }
+
+        return new[]
+        {
+            new QuestionImageSegment
+            {
+                PageIndex = 1,
+                ImagePath = question.ImagePath,
+                ImageTopRatio = question.ImageTopRatio,
+                ImageBottomRatio = question.ImageBottomRatio
+            }
+        };
     }
 
     private static ImageSource? BuildQuestionImageSource(string? imagePath)
@@ -1357,9 +1857,17 @@ public class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanDeleteSourceFile));
     }
 
-    private static string BuildAnalysisSummary(PdfOcrResult analysis)
+    private static string BuildAnalysisSummary(PdfOcrResult analysis, PdfAnalysisDiagnostics? diagnostics = null)
     {
         var baseSummary = $"{analysis.Summary}\n미리보기:\n{analysis.Preview}";
+        if (diagnostics?.ExpectedQuestionRange is QuestionNumberRange expectedRange)
+        {
+            baseSummary += $"\n예상 문항 범위: {expectedRange} ({expectedRange.Count}문항) / 분석 후보 수: {diagnostics.DistinctCandidateCount}";
+            baseSummary += diagnostics.HasExpectedQuestionMismatch
+                ? $"\n예상 비교 결과: 불일치 ({BuildExpectedQuestionMismatchSummary(diagnostics)})"
+                : "\n예상 비교 결과: 일치";
+        }
+
         if (!analysis.HasQuestionCandidates)
         {
             return baseSummary + "\n현재 OCR 텍스트에서 문항 번호 헤더 후보를 찾지 못했습니다.";
@@ -1373,36 +1881,282 @@ public class MainViewModel : ViewModelBase
         return baseSummary + $"\n분할 후보(최대 10개): {string.Join(", ", topCandidates)}";
     }
 
-    private static string BuildCandidateMismatchMessage(PdfOcrResult analysis, AnswerMapParseResult parseResult)
+    private static string BuildExpectedQuestionMismatchSummary(PdfAnalysisDiagnostics diagnostics)
     {
-        if (parseResult.Questions.Count() == 0)
-        {
-            return "정답이 없어 미채점 상태로 저장합니다.";
-        }
-
-        if (!analysis.HasQuestionCandidates)
-        {
-            return "문항 분할 후보가 없어 수량 비교를 생략했습니다.";
-        }
-
-        var expected = analysis.DetectedQuestionCount;
-        var parsed = parseResult.Questions.Count();
-
-        if (parsed == expected)
+        if (diagnostics.ExpectedQuestionRange == null)
         {
             return string.Empty;
         }
 
-        if (parsed > expected)
+        var expectedRange = diagnostics.ExpectedQuestionRange.Value;
+        var messages = new List<string>
         {
-            return $"정답 항목 수({parsed}개)가 추정 문항 수({expected}개)보다 많습니다. 중복/헤더 미검출 항목 확인이 필요합니다.";
+            $"예상 {expectedRange.StartIndex}-{expectedRange.EndIndex} ({expectedRange.Count}개) / 분석 {diagnostics.DistinctCandidateCount}개"
+        };
+
+        if (diagnostics.MissingIndexes.Length > 0)
+        {
+            messages.Add($"누락 번호: {string.Join(", ", diagnostics.MissingIndexes)}");
         }
 
-        return $"정답 항목 수({parsed}개)가 추정 문항 수({expected}개)보다 적습니다. 누락된 문항이 있을 수 있습니다.";
+        if (diagnostics.UnexpectedIndexes.Length > 0)
+        {
+            messages.Add($"예상 범위 밖 번호: {string.Join(", ", diagnostics.UnexpectedIndexes)}");
+        }
+
+        if (diagnostics.DuplicateIndexes.Length > 0)
+        {
+            messages.Add($"중복 번호: {string.Join(", ", diagnostics.DuplicateIndexes.Select(x => $"{x.Index}({x.Count})"))}");
+        }
+
+        return string.Join(" / ", messages);
+    }
+
+    private static string BuildCandidateMismatchMessage(
+        PdfOcrResult analysis,
+        AnswerMapParseResult parseResult,
+        IReadOnlyList<Question> questions)
+    {
+        var messages = new List<string>();
+
+        if (parseResult.Questions.Count() == 0)
+        {
+            messages.Add("정답이 없어 미채점 상태로 저장합니다.");
+        }
+        else if (!analysis.HasQuestionCandidates)
+        {
+            messages.Add("문항 분할 후보가 없어 수량 비교를 생략했습니다.");
+        }
+        else
+        {
+            var expected = analysis.DetectedQuestionCount;
+            var parsed = parseResult.Questions.Count();
+
+            if (parsed > expected)
+            {
+                messages.Add($"정답 항목 수({parsed}개)가 추정 문항 수({expected}개)보다 많습니다. 중복/헤더 미검출 항목 확인이 필요합니다.");
+            }
+            else if (parsed < expected)
+            {
+                messages.Add($"정답 항목 수({parsed}개)가 추정 문항 수({expected}개)보다 적습니다. 누락된 문항이 있을 수 있습니다.");
+            }
+        }
+
+        var questionsWithoutImage = questions.Count(x =>
+            (x.ImageSegments == null || x.ImageSegments.Length == 0) &&
+            string.IsNullOrWhiteSpace(x.ImagePath));
+        if (questionsWithoutImage > 0)
+        {
+            messages.Add($"OCR에서 정확히 대응되는 문항 후보가 없는 항목 {questionsWithoutImage}개는 이미지 없이 저장했습니다.");
+        }
+
+        return string.Join(" / ", messages);
     }
 
     private static string NormalizeSourceFileName(string sourceFileName)
     {
         return string.IsNullOrWhiteSpace(sourceFileName) ? "manual" : sourceFileName.Trim();
+    }
+
+    private static PdfAnalysisDiagnostics BuildPdfAnalysisDiagnostics(
+        string sourceFileName,
+        PdfOcrResult analysis,
+        QuestionNumberRange? expectedQuestionRange)
+    {
+        var rawCandidates = analysis.QuestionCandidates
+            .Where(x => x.Index > 0)
+            .ToArray();
+        var candidateIndexes = rawCandidates
+            .Select(x => x.Index)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToArray();
+        var duplicateIndexes = rawCandidates
+            .GroupBy(x => x.Index)
+            .Where(x => x.Count() > 1)
+            .OrderBy(x => x.Key)
+            .Select(x => new PdfAnalysisDuplicateDiagnostics
+            {
+                Index = x.Key,
+                Count = x.Count(),
+                Headers = x.Select(y => y.Header).Take(5).ToArray()
+            })
+            .ToArray();
+        var missingIndexes = expectedQuestionRange.HasValue
+            ? Enumerable.Range(expectedQuestionRange.Value.StartIndex, expectedQuestionRange.Value.Count)
+                .Except(candidateIndexes)
+                .ToArray()
+            : Array.Empty<int>();
+        var unexpectedIndexes = expectedQuestionRange.HasValue
+            ? candidateIndexes
+                .Where(x => !expectedQuestionRange.Value.Contains(x))
+                .ToArray()
+            : Array.Empty<int>();
+        var hasExpectedQuestionMismatch = expectedQuestionRange.HasValue &&
+            (candidateIndexes.Length != expectedQuestionRange.Value.Count ||
+             missingIndexes.Length > 0 ||
+             unexpectedIndexes.Length > 0 ||
+             duplicateIndexes.Length > 0);
+
+        return new PdfAnalysisDiagnostics
+        {
+            GeneratedAt = DateTimeOffset.Now,
+            SourceFileName = sourceFileName,
+            ExpectedQuestionRange = expectedQuestionRange,
+            PageCount = analysis.PageCount,
+            TotalWordCount = analysis.TotalWordCount,
+            RawCandidateCount = rawCandidates.Length,
+            DistinctCandidateCount = candidateIndexes.Length,
+            HasExpectedQuestionMismatch = hasExpectedQuestionMismatch,
+            CandidateIndexes = candidateIndexes,
+            MissingIndexes = missingIndexes,
+            UnexpectedIndexes = unexpectedIndexes,
+            DuplicateIndexes = duplicateIndexes,
+            Candidates = rawCandidates
+                .OrderBy(x => x.Index)
+                .ThenBy(x => x.StartPage)
+                .ThenBy(x => x.StartLineInPage)
+                .Select(x => new PdfAnalysisCandidateDiagnostics
+                {
+                    Index = x.Index,
+                    Header = x.Header,
+                    StartPage = x.StartPage,
+                    StartLineInPage = x.StartLineInPage,
+                    EndPage = x.EndPage,
+                    EndLineInPage = x.EndLineInPage,
+                    PreviewText = x.PreviewText
+                })
+                .ToArray(),
+            Pages = analysis.Pages
+                .OrderBy(x => x.PageIndex)
+                .Select(x => new PdfAnalysisPageDiagnostics
+                {
+                    PageIndex = x.PageIndex,
+                    WordCount = x.WordCount,
+                    LineCount = x.Lines?.Count ?? 0,
+                    LeadingLines = BuildLeadingLines(x),
+                    CandidateIndexes = rawCandidates
+                        .Where(candidate => candidate.StartPage == x.PageIndex)
+                        .Select(candidate => candidate.Index)
+                        .Distinct()
+                        .OrderBy(index => index)
+                        .ToArray()
+                })
+                .ToArray()
+        };
+    }
+
+    private static string[] BuildLeadingLines(OcrPageResult page)
+    {
+        if (page.Lines != null && page.Lines.Count > 0)
+        {
+            return page.Lines
+                .OrderBy(x => x.LineInPage)
+                .Take(8)
+                .Select(x => $"{x.LineInPage}: {x.Text}")
+                .ToArray();
+        }
+
+        return page.Text
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Take(8)
+            .Select((text, index) => $"{index + 1}: {text}")
+            .ToArray();
+    }
+
+    private static string BuildDiagnosticsText(PdfAnalysisDiagnostics diagnostics)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"파일: {diagnostics.SourceFileName}");
+        builder.AppendLine($"생성 시각: {diagnostics.GeneratedAt:yyyy-MM-dd HH:mm:ss zzz}");
+        builder.AppendLine($"페이지 수: {diagnostics.PageCount}");
+        builder.AppendLine($"전체 단어 수: {diagnostics.TotalWordCount}");
+        builder.AppendLine($"원시 후보 수: {diagnostics.RawCandidateCount}");
+        builder.AppendLine($"고유 후보 수: {diagnostics.DistinctCandidateCount}");
+        builder.AppendLine($"후보 번호: {FormatIntArray(diagnostics.CandidateIndexes)}");
+
+        if (diagnostics.ExpectedQuestionRange is QuestionNumberRange expectedRange)
+        {
+            builder.AppendLine($"예상 문항 범위: {expectedRange}");
+            builder.AppendLine($"예상 문항 수: {expectedRange.Count}");
+            builder.AppendLine($"예상 비교 불일치: {(diagnostics.HasExpectedQuestionMismatch ? "예" : "아니오")}");
+            builder.AppendLine($"누락 번호: {FormatIntArray(diagnostics.MissingIndexes)}");
+            builder.AppendLine($"예상 범위 밖 번호: {FormatIntArray(diagnostics.UnexpectedIndexes)}");
+        }
+
+        builder.AppendLine($"중복 번호: {(diagnostics.DuplicateIndexes.Length == 0 ? "없음" : string.Join(", ", diagnostics.DuplicateIndexes.Select(x => $"{x.Index}({x.Count})")))}");
+        builder.AppendLine();
+        builder.AppendLine("[페이지별 상단 줄]");
+        foreach (var page in diagnostics.Pages)
+        {
+            builder.AppendLine($"- 페이지 {page.PageIndex} | 후보: {FormatIntArray(page.CandidateIndexes)} | lineCount={page.LineCount} | words={page.WordCount}");
+            foreach (var line in page.LeadingLines)
+            {
+                builder.AppendLine($"  {line}");
+            }
+        }
+
+        builder.AppendLine();
+        builder.AppendLine("[후보 위치]");
+        foreach (var candidate in diagnostics.Candidates)
+        {
+            builder.AppendLine($"- {candidate.Index}번 | p{candidate.StartPage}:{candidate.StartLineInPage} -> p{candidate.EndPage}:{candidate.EndLineInPage} | {candidate.Header}");
+            if (!string.IsNullOrWhiteSpace(candidate.PreviewText))
+            {
+                builder.AppendLine($"  preview: {candidate.PreviewText}");
+            }
+        }
+
+        return builder.ToString().TrimEnd();
+    }
+
+    private static string FormatIntArray(IReadOnlyList<int> values)
+    {
+        return values.Count == 0 ? "없음" : string.Join(", ", values);
+    }
+
+    private sealed class PdfAnalysisDiagnostics
+    {
+        public DateTimeOffset GeneratedAt { get; init; }
+        public string SourceFileName { get; init; } = string.Empty;
+        public QuestionNumberRange? ExpectedQuestionRange { get; init; }
+        public int PageCount { get; init; }
+        public int TotalWordCount { get; init; }
+        public int RawCandidateCount { get; init; }
+        public int DistinctCandidateCount { get; init; }
+        public bool HasExpectedQuestionMismatch { get; init; }
+        public int[] CandidateIndexes { get; init; } = Array.Empty<int>();
+        public int[] MissingIndexes { get; init; } = Array.Empty<int>();
+        public int[] UnexpectedIndexes { get; init; } = Array.Empty<int>();
+        public PdfAnalysisDuplicateDiagnostics[] DuplicateIndexes { get; init; } = Array.Empty<PdfAnalysisDuplicateDiagnostics>();
+        public PdfAnalysisCandidateDiagnostics[] Candidates { get; init; } = Array.Empty<PdfAnalysisCandidateDiagnostics>();
+        public PdfAnalysisPageDiagnostics[] Pages { get; init; } = Array.Empty<PdfAnalysisPageDiagnostics>();
+    }
+
+    private sealed class PdfAnalysisDuplicateDiagnostics
+    {
+        public int Index { get; init; }
+        public int Count { get; init; }
+        public string[] Headers { get; init; } = Array.Empty<string>();
+    }
+
+    private sealed class PdfAnalysisCandidateDiagnostics
+    {
+        public int Index { get; init; }
+        public string Header { get; init; } = string.Empty;
+        public int StartPage { get; init; }
+        public int StartLineInPage { get; init; }
+        public int EndPage { get; init; }
+        public int EndLineInPage { get; init; }
+        public string PreviewText { get; init; } = string.Empty;
+    }
+
+    private sealed class PdfAnalysisPageDiagnostics
+    {
+        public int PageIndex { get; init; }
+        public int WordCount { get; init; }
+        public int LineCount { get; init; }
+        public string[] LeadingLines { get; init; } = Array.Empty<string>();
+        public int[] CandidateIndexes { get; init; } = Array.Empty<int>();
     }
 }

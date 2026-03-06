@@ -1,12 +1,25 @@
 namespace PreviousPractice.Models;
 
+public sealed record OcrLineResult
+(
+    int LineInPage,
+    string Text,
+    double LeftRatio,
+    double TopRatio,
+    double RightRatio,
+    double BottomRatio
+);
+
 public sealed record OcrPageResult
 (
     int PageIndex,
     string Text,
     int WordCount,
     float AverageWordConfidence,
-    string? ImagePath = null
+    string? ImagePath = null,
+    int ImagePixelWidth = 0,
+    int ImagePixelHeight = 0,
+    IReadOnlyList<OcrLineResult>? Lines = null
 );
 
 public sealed class PdfOcrResult

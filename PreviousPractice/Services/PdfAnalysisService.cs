@@ -18,6 +18,7 @@ public interface IPdfAnalysisService
     Task<PdfOcrResult> AnalyzePdfAsync(
         string pdfFilePath,
         IProgress<PdfAnalysisProgress>? progress = null,
+        QuestionNumberRange? expectedQuestionRange = null,
         CancellationToken cancellationToken = default);
 }
 
@@ -30,15 +31,16 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
     public Task<PdfOcrResult> AnalyzePdfAsync(
         string pdfFilePath,
         IProgress<PdfAnalysisProgress>? progress = null,
+        QuestionNumberRange? expectedQuestionRange = null,
         CancellationToken cancellationToken = default)
     {
         AppLog.Info(
             nameof(PdfAnalysisService),
             $"AnalyzePdfAsync 시작 | file={pdfFilePath} | os={Environment.OSVersion.Platform}");
 #if WINDOWS
-        return AnalyzePdfWithWindowsOcrAsync(pdfFilePath, progress, cancellationToken);
+        return AnalyzePdfWithWindowsOcrAsync(pdfFilePath, progress, expectedQuestionRange, cancellationToken);
 #else
-        return AnalyzePdfWithCommandLineToolsAsync(pdfFilePath, progress, cancellationToken);
+        return AnalyzePdfWithCommandLineToolsAsync(pdfFilePath, progress, expectedQuestionRange, cancellationToken);
 #endif
     }
 
@@ -179,12 +181,100 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
         using var destination = File.Create(destinationPath);
         await imageStream.AsStreamForRead().CopyToAsync(destination);
     }
+
+    private static IReadOnlyList<OcrLineResult> BuildLineResults(
+        OcrResult ocrResult,
+        int imagePixelWidth,
+        int imagePixelHeight)
+    {
+        if (ocrResult == null || imagePixelWidth <= 0 || imagePixelHeight <= 0)
+        {
+            return Array.Empty<OcrLineResult>();
+        }
+
+        var results = new List<OcrLineResult>();
+        var fallbackLineCount = Math.Max(1, ocrResult.Lines.Count);
+
+        for (var i = 0; i < ocrResult.Lines.Count; i++)
+        {
+            var line = ocrResult.Lines[i];
+            var text = line.Text?.Trim() ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            if (!TryGetLineBounds(line, out var left, out var top, out var right, out var bottom))
+            {
+                left = 0d;
+                right = 1d;
+                top = (double)i / fallbackLineCount;
+                bottom = (double)(i + 1) / fallbackLineCount;
+            }
+
+            results.Add(new OcrLineResult(
+                i + 1,
+                text,
+                Math.Clamp(left / imagePixelWidth, 0d, 1d),
+                Math.Clamp(top / imagePixelHeight, 0d, 1d),
+                Math.Clamp(right / imagePixelWidth, 0d, 1d),
+                Math.Clamp(bottom / imagePixelHeight, 0d, 1d)));
+        }
+
+        return results;
+    }
+
+    private static bool TryGetLineBounds(
+        OcrLine line,
+        out double left,
+        out double top,
+        out double right,
+        out double bottom)
+    {
+        left = 0d;
+        top = 0d;
+        right = 0d;
+        bottom = 0d;
+
+        if (line?.Words == null || line.Words.Count == 0)
+        {
+            return false;
+        }
+
+        var hasBounds = false;
+        foreach (var word in line.Words)
+        {
+            var rect = word.BoundingRect;
+            if (rect.Width <= 0 || rect.Height <= 0)
+            {
+                continue;
+            }
+
+            if (!hasBounds)
+            {
+                left = rect.X;
+                top = rect.Y;
+                right = rect.X + rect.Width;
+                bottom = rect.Y + rect.Height;
+                hasBounds = true;
+                continue;
+            }
+
+            left = Math.Min(left, rect.X);
+            top = Math.Min(top, rect.Y);
+            right = Math.Max(right, rect.X + rect.Width);
+            bottom = Math.Max(bottom, rect.Y + rect.Height);
+        }
+
+        return hasBounds;
+    }
     #endif
 
 #if WINDOWS
     private static async Task<PdfOcrResult> AnalyzePdfWithWindowsOcrAsync(
         string pdfFilePath,
         IProgress<PdfAnalysisProgress>? progress,
+        QuestionNumberRange? expectedQuestionRange,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(pdfFilePath))
@@ -268,7 +358,10 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                     recognizedText,
                     wordCount,
                     averageConfidence,
-                    File.Exists(imagePath) ? imagePath : null));
+                    File.Exists(imagePath) ? imagePath : null,
+                    softwareBitmap.PixelWidth,
+                    softwareBitmap.PixelHeight,
+                    BuildLineResults(ocrResult, softwareBitmap.PixelWidth, softwareBitmap.PixelHeight)));
             }
 
             ReportProgress(progress, totalPages, totalPages, "OCR 분석 완료");
@@ -279,7 +372,7 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 return FailWithLog(sourceFileName, "이미지에서 텍스트를 추출하지 못했습니다.");
             }
 
-            var candidates = OcrQuestionSegmenter.SplitByHeader(pages);
+            var candidates = OcrQuestionSegmenter.SplitByHeader(pages, expectedQuestionRange);
             AppLog.Info(
                 nameof(PdfAnalysisService),
                 $"OCR 성공 | file={sourceFileName} | pages={pages.Count} | candidates={candidates.Count}");
@@ -299,6 +392,7 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
     private static async Task<PdfOcrResult> AnalyzePdfWithCommandLineToolsAsync(
         string pdfFilePath,
         IProgress<PdfAnalysisProgress>? progress,
+        QuestionNumberRange? expectedQuestionRange,
         CancellationToken cancellationToken = default)
     {
         var sourceFileName = Path.GetFileName(pdfFilePath);
@@ -451,7 +545,7 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
                 return FailWithLog(sourceFileName, "이미지에서 텍스트를 추출하지 못했습니다.");
             }
 
-            var candidates = OcrQuestionSegmenter.SplitByHeader(pages);
+            var candidates = OcrQuestionSegmenter.SplitByHeader(pages, expectedQuestionRange);
             AppLog.Info(
                 nameof(PdfAnalysisService),
                 $"OCR 성공 | file={sourceFileName} | pages={pages.Count} | candidates={candidates.Count}");

@@ -28,10 +28,18 @@ public sealed class PracticeRepository : IPracticeRepository
 
     public async Task<IReadOnlyList<Category>> GetCategoriesAsync()
     {
-        var state = await LoadStateAsync().ConfigureAwait(false);
-        return state.Categories
-            .OrderBy(x => x.Name)
-            .ToList();
+        await _sync.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
+            return state.Categories
+                .OrderBy(x => x.Name)
+                .ToList();
+        }
+        finally
+        {
+            _sync.Release();
+        }
     }
 
     public async Task<Category> AddOrGetCategoryAsync(string name)
@@ -45,7 +53,7 @@ public sealed class PracticeRepository : IPracticeRepository
         await _sync.WaitAsync().ConfigureAwait(false);
         try
         {
-            var state = await LoadStateAsync();
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
             var existing = state.Categories.FirstOrDefault(x =>
                 string.Equals(x.Name, trimmedName, StringComparison.OrdinalIgnoreCase));
 
@@ -59,7 +67,7 @@ public sealed class PracticeRepository : IPracticeRepository
                 Name = trimmedName
             };
             state.Categories.Add(category);
-            await SaveStateAsync(state).ConfigureAwait(false);
+            await SaveStateCoreAsync(state).ConfigureAwait(false);
             return category;
         }
         finally
@@ -70,11 +78,19 @@ public sealed class PracticeRepository : IPracticeRepository
 
     public async Task<IReadOnlyList<Question>> GetQuestionsAsync(string categoryId)
     {
-        var state = await LoadStateAsync().ConfigureAwait(false);
-        return state.Questions
-            .Where(x => x.CategoryId == categoryId)
-            .OrderBy(x => x.Index)
-            .ToList();
+        await _sync.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
+            return state.Questions
+                .Where(x => x.CategoryId == categoryId)
+                .OrderBy(x => x.Index)
+                .ToList();
+        }
+        finally
+        {
+            _sync.Release();
+        }
     }
 
     public async Task<bool> RemoveCategoryAsync(string categoryId)
@@ -82,7 +98,7 @@ public sealed class PracticeRepository : IPracticeRepository
         await _sync.WaitAsync().ConfigureAwait(false);
         try
         {
-            var state = await LoadStateAsync();
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
             var target = state.Categories.FirstOrDefault(x => x.Id == categoryId);
             if (target == null)
             {
@@ -96,7 +112,7 @@ public sealed class PracticeRepository : IPracticeRepository
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
             state.WrongQuestionIds.RemoveAll(x => !questionIds.Contains(x, StringComparer.OrdinalIgnoreCase));
 
-            await SaveStateAsync(state).ConfigureAwait(false);
+            await SaveStateCoreAsync(state).ConfigureAwait(false);
             return true;
         }
         finally
@@ -112,55 +128,77 @@ public sealed class PracticeRepository : IPracticeRepository
             return Array.Empty<Question>();
         }
 
-        var state = await LoadStateAsync().ConfigureAwait(false);
-
-        var questionList = state.Questions
-            .Where(x => x.CategoryId == categoryId)
-            .ToList();
-
-        if (includeWrongOnly)
+        await _sync.WaitAsync().ConfigureAwait(false);
+        try
         {
-            var wrongIds = state.WrongQuestionIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            questionList = questionList
-                .Where(x => wrongIds.Contains(x.Id.ToString()))
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
+
+            var questionList = state.Questions
+                .Where(x => x.CategoryId == categoryId)
+                .ToList();
+
+            if (includeWrongOnly)
+            {
+                var wrongIds = state.WrongQuestionIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                questionList = questionList
+                    .Where(x => wrongIds.Contains(x.Id.ToString()))
+                    .ToList();
+            }
+
+            if (questionList.Count == 0)
+            {
+                return Array.Empty<Question>();
+            }
+
+            return questionList
+                .OrderBy(_ => _random.Next())
+                .Take(Math.Min(count, questionList.Count))
                 .ToList();
         }
-
-        if (questionList.Count == 0)
+        finally
         {
-            return Array.Empty<Question>();
+            _sync.Release();
         }
-
-        return questionList
-            .OrderBy(_ => _random.Next())
-            .Take(Math.Min(count, questionList.Count))
-            .ToList();
     }
 
     public async Task<int> GetQuestionCountBySourceFileAsync(string categoryId, string sourceFileName)
     {
         var normalizedSourceFile = NormalizeSourceFileName(sourceFileName);
-        var state = await LoadStateAsync().ConfigureAwait(false);
-
-        return state.Questions.Count(x =>
-            x.CategoryId == categoryId &&
-            string.Equals(x.SourceFileName, normalizedSourceFile, StringComparison.OrdinalIgnoreCase));
+        await _sync.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
+            return state.Questions.Count(x =>
+                x.CategoryId == categoryId &&
+                string.Equals(x.SourceFileName, normalizedSourceFile, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            _sync.Release();
+        }
     }
 
     public async Task<IReadOnlyList<SourceFileSummary>> GetSourceFilesAsync(string categoryId)
     {
-        var state = await LoadStateAsync().ConfigureAwait(false);
-
-        return state.Questions
-            .Where(x => x.CategoryId == categoryId)
-            .GroupBy(x => x.SourceFileName)
-            .Select(group => new SourceFileSummary
-            {
-                SourceFileName = group.Key,
-                QuestionCount = group.Count()
-            })
-            .OrderBy(x => x.SourceFileName)
-            .ToList();
+        await _sync.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
+            return state.Questions
+                .Where(x => x.CategoryId == categoryId)
+                .GroupBy(x => x.SourceFileName)
+                .Select(group => new SourceFileSummary
+                {
+                    SourceFileName = group.Key,
+                    QuestionCount = group.Count()
+                })
+                .OrderBy(x => x.SourceFileName)
+                .ToList();
+        }
+        finally
+        {
+            _sync.Release();
+        }
     }
 
     public async Task<bool> RemoveQuestionsBySourceFileAsync(string categoryId, string sourceFileName)
@@ -170,7 +208,7 @@ public sealed class PracticeRepository : IPracticeRepository
         await _sync.WaitAsync().ConfigureAwait(false);
         try
         {
-            var state = await LoadStateAsync();
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
             var target = state.Questions.Where(x =>
                 x.CategoryId == categoryId &&
                 string.Equals(x.SourceFileName, normalizedSourceFile, StringComparison.OrdinalIgnoreCase))
@@ -187,7 +225,7 @@ public sealed class PracticeRepository : IPracticeRepository
                 string.Equals(x.SourceFileName, normalizedSourceFile, StringComparison.OrdinalIgnoreCase));
 
             CleanupWrongQuestions(state, removedQuestionIds);
-            await SaveStateAsync(state).ConfigureAwait(false);
+            await SaveStateCoreAsync(state).ConfigureAwait(false);
             return true;
         }
         finally
@@ -208,7 +246,7 @@ public sealed class PracticeRepository : IPracticeRepository
         await _sync.WaitAsync().ConfigureAwait(false);
         try
         {
-            var state = await LoadStateAsync();
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
             var removedQuestionIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             if (overwriteBySourceFile)
@@ -240,8 +278,9 @@ public sealed class PracticeRepository : IPracticeRepository
                         ? string.Empty
                         : incoming.Prompt.Trim(),
                     Type = incoming.Type,
-                    Choices = incoming.Choices,
-                    CorrectAnswers = incoming.CorrectAnswers,
+                    Choices = incoming.Choices?.ToArray() ?? Array.Empty<string>(),
+                    CorrectAnswers = incoming.CorrectAnswers?.ToArray() ?? Array.Empty<string>(),
+                    ImageSegments = CloneImageSegments(incoming),
                     ImagePath = incoming.ImagePath,
                     ImageTopRatio = incoming.ImageTopRatio,
                     ImageBottomRatio = incoming.ImageBottomRatio
@@ -269,20 +308,25 @@ public sealed class PracticeRepository : IPracticeRepository
                         existing.Prompt = question.Prompt;
                     }
 
-                    if (!string.IsNullOrWhiteSpace(question.ImagePath))
-                    {
-                        existing.ImagePath = question.ImagePath;
-                    }
-
+                    var hadCorrectAnswers = existing.CorrectAnswers.Any();
+                    existing.ImageSegments = CloneImageSegments(question);
+                    existing.ImagePath = question.ImagePath;
                     existing.ImageTopRatio = question.ImageTopRatio;
                     existing.ImageBottomRatio = question.ImageBottomRatio;
 
-                    if (updateExistingCorrectAnswers && question.CorrectAnswers.Length > 0)
+                    if (updateExistingCorrectAnswers)
                     {
                         existing.CorrectAnswers = question.CorrectAnswers;
+                        if (question.CorrectAnswers.Length > 0 || !hadCorrectAnswers)
+                        {
+                            existing.Type = question.Type;
+                        }
+                    }
+                    else
+                    {
+                        existing.Type = question.Type;
                     }
 
-                    existing.Type = question.Type;
                     existing.Choices = question.Choices;
                     continue;
                 }
@@ -292,7 +336,7 @@ public sealed class PracticeRepository : IPracticeRepository
 
             CleanupWrongQuestions(state, Array.Empty<string>());
 
-            await SaveStateAsync(state).ConfigureAwait(false);
+            await SaveStateCoreAsync(state).ConfigureAwait(false);
         }
         finally
         {
@@ -302,17 +346,25 @@ public sealed class PracticeRepository : IPracticeRepository
 
     public async Task<IReadOnlyList<Question>> GetWrongQuestionsAsync()
     {
-        var state = await LoadStateAsync().ConfigureAwait(false);
-        var wrongSet = state.WrongQuestionIds
-            .Where(x => Guid.TryParse(x, out _))
-            .Select(Guid.Parse)
-            .ToHashSet();
+        await _sync.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
+            var wrongSet = state.WrongQuestionIds
+                .Where(x => Guid.TryParse(x, out _))
+                .Select(Guid.Parse)
+                .ToHashSet();
 
-        return state.Questions
-            .Where(x => wrongSet.Contains(x.Id))
-            .OrderBy(x => x.SourceFileName)
-            .ThenBy(x => x.Index)
-            .ToList();
+            return state.Questions
+                .Where(x => wrongSet.Contains(x.Id))
+                .OrderBy(x => x.SourceFileName)
+                .ThenBy(x => x.Index)
+                .ToList();
+        }
+        finally
+        {
+            _sync.Release();
+        }
     }
 
     public async Task MarkWrongAsync(Guid questionId)
@@ -320,12 +372,12 @@ public sealed class PracticeRepository : IPracticeRepository
         await _sync.WaitAsync().ConfigureAwait(false);
         try
         {
-            var state = await LoadStateAsync();
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
             var key = questionId.ToString();
             if (!state.WrongQuestionIds.Contains(key, StringComparer.OrdinalIgnoreCase))
             {
                 state.WrongQuestionIds.Add(key);
-                await SaveStateAsync(state).ConfigureAwait(false);
+                await SaveStateCoreAsync(state).ConfigureAwait(false);
             }
         }
         finally
@@ -339,11 +391,11 @@ public sealed class PracticeRepository : IPracticeRepository
         await _sync.WaitAsync().ConfigureAwait(false);
         try
         {
-            var state = await LoadStateAsync();
+            var state = await LoadStateCoreAsync().ConfigureAwait(false);
             var key = questionId.ToString();
             if (state.WrongQuestionIds.RemoveAll(x => string.Equals(x, key, StringComparison.OrdinalIgnoreCase)) > 0)
             {
-                await SaveStateAsync(state).ConfigureAwait(false);
+                await SaveStateCoreAsync(state).ConfigureAwait(false);
             }
         }
         finally
@@ -352,7 +404,44 @@ public sealed class PracticeRepository : IPracticeRepository
         }
     }
 
-    private async Task<PracticeState> LoadStateAsync()
+    private static QuestionImageSegment[] CloneImageSegments(Question question)
+    {
+        if (question.ImageSegments != null && question.ImageSegments.Length > 0)
+        {
+            return question.ImageSegments
+                .Where(x => x != null)
+                .Select(x => new QuestionImageSegment
+                {
+                    PageIndex = x.PageIndex,
+                    ImagePath = x.ImagePath,
+                    ImageLeftRatio = x.ImageLeftRatio,
+                    ImageTopRatio = x.ImageTopRatio,
+                    ImageRightRatio = x.ImageRightRatio,
+                    ImageBottomRatio = x.ImageBottomRatio,
+                    ImagePixelWidth = x.ImagePixelWidth,
+                    ImagePixelHeight = x.ImagePixelHeight
+                })
+                .ToArray();
+        }
+
+        if (string.IsNullOrWhiteSpace(question.ImagePath))
+        {
+            return Array.Empty<QuestionImageSegment>();
+        }
+
+        return new[]
+        {
+            new QuestionImageSegment
+            {
+                PageIndex = 1,
+                ImagePath = question.ImagePath,
+                ImageTopRatio = question.ImageTopRatio,
+                ImageBottomRatio = question.ImageBottomRatio
+            }
+        };
+    }
+
+    private async Task<PracticeState> LoadStateCoreAsync()
     {
         if (!File.Exists(_filePath))
         {
@@ -388,13 +477,21 @@ public sealed class PracticeRepository : IPracticeRepository
         return string.IsNullOrWhiteSpace(sourceFileName) ? "manual" : sourceFileName.Trim();
     }
 
-    private async Task SaveStateAsync(PracticeState state)
+    private async Task SaveStateCoreAsync(PracticeState state)
     {
         var json = JsonSerializer.Serialize(state, new JsonSerializerOptions
         {
             WriteIndented = true
         });
 
-        await File.WriteAllTextAsync(_filePath, json).ConfigureAwait(false);
+        var directory = Path.GetDirectoryName(_filePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        var tempFilePath = _filePath + ".tmp";
+        await File.WriteAllTextAsync(tempFilePath, json).ConfigureAwait(false);
+        File.Move(tempFilePath, _filePath, overwrite: true);
     }
 }

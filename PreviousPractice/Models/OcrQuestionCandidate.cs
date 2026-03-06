@@ -9,6 +9,7 @@ public sealed record OcrQuestionCandidate
     public int StartLineInPage { get; init; }
     public int EndLineInPage { get; init; }
     public int StartPageLineCount { get; init; }
+    public int EndPageLineCount { get; init; }
     public string? ImagePath { get; init; }
     public string PreviewText { get; init; } = string.Empty;
 }

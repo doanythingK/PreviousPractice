@@ -8,15 +8,20 @@ public static class OcrQuestionSegmenter
 {
     private const int FallbackLinesPerQuestion = 10;
     private const int CandidateLogLimit = 20;
+    private const double LeftColumnMidpointThreshold = 0.45d;
+    private const double RightColumnMidpointThreshold = 0.55d;
+    private const int MinColumnLineCount = 5;
     // OCR이 페이지를 한 줄로 뭉개는 경우, " 1. ", " 2) " 같은 번호 앞에 강제로 줄바꿈을 삽입한다.
     private static readonly Regex SyntheticQuestionBreakRegex = new(
         @"(?<=\s)(?<header>(?:[1-9]|[1-9]\d)\s*[.)])(?=\s)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SingleLineHeaderRegex = new(
-        @"^\s*(?:[Qq]\s*)?(?:(?:제|문항|문제)\s*)?(?<index>\d{1,3}|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|[가-하]|[A-Za-z])\s*(?:[.)\]\-:：]|\s|$)",
+        @"^\s*(?:[Qq]\s*)?(?:(?:제|문항|문제)\s*)?(?<index>\d{1,3})\s*(?:[.)\]\-:：]|\s|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    public static IReadOnlyList<OcrQuestionCandidate> SplitByHeader(IReadOnlyList<OcrPageResult> pages)
+    public static IReadOnlyList<OcrQuestionCandidate> SplitByHeader(
+        IReadOnlyList<OcrPageResult> pages,
+        QuestionNumberRange? expectedQuestionRange = null)
     {
         if (pages.Count == 0)
         {
@@ -30,24 +35,59 @@ public static class OcrQuestionSegmenter
 
         for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
         {
-            var pageNumber = pageIndex + 1;
-            var pageText = ExpandSyntheticLineBreaks(pages[pageIndex].Text, out var insertedBreaks);
-            syntheticBreakCount += insertedBreaks;
-
-            var lineInPage = 0;
-            foreach (var rawLine in pageText.Split('\n'))
+            var page = pages[pageIndex];
+            var pageNumber = page.PageIndex;
+            if (page.Lines != null && page.Lines.Count > 0)
             {
-                var normalized = rawLine.Replace('\r', ' ').Trim();
-                if (string.IsNullOrWhiteSpace(normalized))
+                var trimmedLines = TrimLeadingBoilerplateLines(
+                    page.Lines
+                        .OrderBy(x => x.LineInPage)
+                        .ToArray(),
+                    x => x.Text,
+                    expectedQuestionRange);
+                var orderedLines = ReorderPageLinesByColumns(trimmedLines);
+                var maxLineInPage = 0;
+                foreach (var line in orderedLines)
                 {
-                    continue;
+                    if (string.IsNullOrWhiteSpace(line.Text))
+                    {
+                        continue;
+                    }
+
+                    maxLineInPage = Math.Max(maxLineInPage, line.LineInPage);
+                    lines.Add(new ParsedLine(
+                        pageNumber,
+                        line.LineInPage,
+                        line.Text.Trim(),
+                        line.LeftRatio,
+                        line.TopRatio,
+                        line.RightRatio,
+                        line.BottomRatio));
                 }
 
-                lineInPage++;
-                lines.Add(new ParsedLine(pageNumber, lineInPage, normalized));
+                pageLineCounts[pageNumber] = Math.Max(1, maxLineInPage);
+                continue;
             }
 
-            pageLineCounts[pageNumber] = lineInPage;
+            var pageText = ExpandSyntheticLineBreaks(page.Text, out var insertedBreaks);
+            syntheticBreakCount += insertedBreaks;
+
+            var rawLines = pageText.Split('\n')
+                .Select((rawLine, index) => new ParsedLine(pageNumber, index + 1, rawLine.Replace('\r', ' ').Trim()))
+                .Where(x => !string.IsNullOrWhiteSpace(x.Text))
+                .ToArray();
+            var trimmedTextLines = TrimLeadingBoilerplateLines(rawLines, x => x.Text, expectedQuestionRange);
+
+            var lineInPage = 0;
+            foreach (var line in trimmedTextLines)
+            {
+                lineInPage = Math.Max(lineInPage, line.LineInPage);
+                lines.Add(line);
+            }
+
+            pageLineCounts[pageNumber] = Math.Max(
+                lineInPage,
+                rawLines.Length == 0 ? 0 : rawLines.Max(x => x.LineInPage));
         }
 
         if (lines.Count == 0)
@@ -75,48 +115,64 @@ public static class OcrQuestionSegmenter
                 headerRegexMatchCount++;
             }
 
-            if (match.Success && TryNormalizeQuestionIndex(match.Groups["index"].Value, out var index))
+            if (TryMatchQuestionHeader(lines, i, SingleLineHeaderRegex, expectedQuestionRange, out var index))
             {
-                normalizedIndexMatchCount++;
-                if (current is not null)
+                if (ShouldStartNewCandidate(current, index))
                 {
-                    candidates.Add(FinalizeCurrent(current, currentBuffer));
-                }
-
-                if (seenIndex.Add(index))
-                {
-                    current = new OcrQuestionCandidate
+                    normalizedIndexMatchCount++;
+                    if (seenIndex.Add(index))
                     {
-                        Index = index,
-                        Header = line.Text,
-                        StartPage = line.PageIndex,
-                        EndPage = line.PageIndex,
-                        StartLineInPage = line.LineInPage,
-                        EndLineInPage = line.LineInPage,
-                        StartPageLineCount = GetPageLineCount(pageLineCounts, line.PageIndex)
-                    };
-                    currentBuffer.Clear();
-                }
-                else
-                {
-                    // 같은 번호가 반복으로 들어오면 새 질문으로 간주하지 않는다.
-                    duplicateIndexCount++;
-                    current = null;
-                    currentBuffer.Clear();
-                }
+                        if (current is not null)
+                        {
+                            candidates.Add(FinalizeCurrent(current, currentBuffer));
+                        }
 
-                continue;
+                        current = new OcrQuestionCandidate
+                        {
+                            Index = index,
+                            Header = line.Text,
+                            StartPage = line.PageIndex,
+                            EndPage = line.PageIndex,
+                            StartLineInPage = line.LineInPage,
+                            EndLineInPage = line.LineInPage,
+                            StartPageLineCount = GetPageLineCount(pageLineCounts, line.PageIndex),
+                            EndPageLineCount = GetPageLineCount(pageLineCounts, line.PageIndex)
+                        };
+                        currentBuffer.Clear();
+                        continue;
+                    }
+
+                    duplicateIndexCount++;
+                }
             }
 
             if (current != null)
             {
                 currentBuffer.AppendLine(line.Text);
+                current = current with
+                {
+                    EndPage = line.PageIndex,
+                    EndLineInPage = line.LineInPage,
+                    EndPageLineCount = GetPageLineCount(pageLineCounts, line.PageIndex)
+                };
             }
         }
 
         if (current is not null)
         {
             candidates.Add(FinalizeCurrent(current, currentBuffer));
+        }
+
+        if (candidates.Count == 0)
+        {
+            candidates = SplitByPermissiveHeader(
+                    lines,
+                    pageLineCounts,
+                    expectedQuestionRange,
+                    out headerRegexMatchCount,
+                    out normalizedIndexMatchCount,
+                    out duplicateIndexCount)
+                .ToList();
         }
 
         if (candidates.Count == 0)
@@ -129,12 +185,353 @@ public static class OcrQuestionSegmenter
             return fallback;
         }
 
-        var resolved = ApplyRanges(candidates, pageLineCounts, pages.Count);
         AppLog.Info(
             nameof(OcrQuestionSegmenter),
-            $"분할 결과(헤더) | pages={pages.Count} | lines={lines.Count} | syntheticBreaks={syntheticBreakCount} | regexMatch={headerRegexMatchCount} | normalized={normalizedIndexMatchCount} | duplicates={duplicateIndexCount} | candidates={resolved.Count}");
-        LogCandidateSummary("header", resolved);
-        return resolved;
+            $"분할 결과(헤더) | pages={pages.Count} | lines={lines.Count} | syntheticBreaks={syntheticBreakCount} | regexMatch={headerRegexMatchCount} | normalized={normalizedIndexMatchCount} | duplicates={duplicateIndexCount} | candidates={candidates.Count}");
+        LogCandidateSummary("header", candidates);
+        return candidates;
+    }
+
+    private static IReadOnlyList<OcrQuestionCandidate> SplitByPermissiveHeader(
+        IReadOnlyList<ParsedLine> lines,
+        IReadOnlyDictionary<int, int> pageLineCounts,
+        QuestionNumberRange? expectedQuestionRange,
+        out int headerRegexMatchCount,
+        out int normalizedIndexMatchCount,
+        out int duplicateIndexCount)
+    {
+        headerRegexMatchCount = 0;
+        normalizedIndexMatchCount = 0;
+        duplicateIndexCount = 0;
+
+        var permissiveHeaderRegex = new Regex(
+            @"^\s*(?:[Qq]\s*)?(?:(?:제|문항|문제)\s*)?(?<index>\d{1,3}|[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳]|[가-하]|[A-Za-z])\s*(?:[.)\]\-:：]|\s|$)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+        var candidates = new List<OcrQuestionCandidate>();
+        OcrQuestionCandidate? current = null;
+        var currentBuffer = new StringBuilder();
+        var seenIndex = new HashSet<int>();
+
+        for (var i = 0; i < lines.Count; i++)
+        {
+            var line = lines[i];
+            var match = permissiveHeaderRegex.Match(line.Text);
+            if (match.Success)
+            {
+                headerRegexMatchCount++;
+            }
+
+            if (TryMatchQuestionHeader(lines, i, permissiveHeaderRegex, expectedQuestionRange, out var index) &&
+                ShouldStartNewCandidate(current, index))
+            {
+                normalizedIndexMatchCount++;
+                if (seenIndex.Add(index))
+                {
+                    if (current is not null)
+                    {
+                        candidates.Add(FinalizeCurrent(current, currentBuffer));
+                    }
+
+                    current = new OcrQuestionCandidate
+                    {
+                        Index = index,
+                        Header = line.Text,
+                        StartPage = line.PageIndex,
+                        EndPage = line.PageIndex,
+                        StartLineInPage = line.LineInPage,
+                        EndLineInPage = line.LineInPage,
+                        StartPageLineCount = GetPageLineCount(pageLineCounts, line.PageIndex),
+                        EndPageLineCount = GetPageLineCount(pageLineCounts, line.PageIndex)
+                    };
+                    currentBuffer.Clear();
+                    continue;
+                }
+
+                duplicateIndexCount++;
+            }
+
+            if (current != null)
+            {
+                currentBuffer.AppendLine(line.Text);
+                current = current with
+                {
+                    EndPage = line.PageIndex,
+                    EndLineInPage = line.LineInPage,
+                    EndPageLineCount = GetPageLineCount(pageLineCounts, line.PageIndex)
+                };
+            }
+        }
+
+        if (current is not null)
+        {
+            candidates.Add(FinalizeCurrent(current, currentBuffer));
+        }
+
+        return candidates;
+    }
+
+    private static bool ShouldStartNewCandidate(OcrQuestionCandidate? current, int index)
+    {
+        if (index <= 0)
+        {
+            return false;
+        }
+
+        if (current == null)
+        {
+            return true;
+        }
+
+        return index > current.Index;
+    }
+
+    private static OcrLineResult[] ReorderPageLinesByColumns(IReadOnlyList<OcrLineResult> lines)
+    {
+        if (lines.Count == 0)
+        {
+            return Array.Empty<OcrLineResult>();
+        }
+
+        var leftColumnCount = 0;
+        var rightColumnCount = 0;
+
+        foreach (var line in lines)
+        {
+            var midpoint = GetHorizontalMidpoint(line.LeftRatio, line.RightRatio);
+            if (midpoint <= LeftColumnMidpointThreshold)
+            {
+                leftColumnCount++;
+            }
+            else if (midpoint >= RightColumnMidpointThreshold)
+            {
+                rightColumnCount++;
+            }
+        }
+
+        if (leftColumnCount < MinColumnLineCount || rightColumnCount < MinColumnLineCount)
+        {
+            return lines
+                .OrderBy(x => x.TopRatio)
+                .ThenBy(x => x.LineInPage)
+                .ToArray();
+        }
+
+        return lines
+            .OrderBy(GetColumnIndex)
+            .ThenBy(x => x.TopRatio)
+            .ThenBy(x => x.LeftRatio)
+            .ThenBy(x => x.LineInPage)
+            .ToArray();
+    }
+
+    private static int GetColumnIndex(OcrLineResult line)
+    {
+        var midpoint = GetHorizontalMidpoint(line.LeftRatio, line.RightRatio);
+        return midpoint <= LeftColumnMidpointThreshold ? 0 : 1;
+    }
+
+    private static double GetHorizontalMidpoint(double leftRatio, double rightRatio)
+    {
+        return (leftRatio + rightRatio) / 2d;
+    }
+
+    private static TLine[] TrimLeadingBoilerplateLines<TLine>(
+        IReadOnlyList<TLine> sourceLines,
+        Func<TLine, string> textSelector,
+        QuestionNumberRange? expectedQuestionRange)
+    {
+        if (sourceLines.Count == 0)
+        {
+            return Array.Empty<TLine>();
+        }
+
+        var firstHeaderIndex = -1;
+        for (var i = 0; i < sourceLines.Count; i++)
+        {
+            var currentText = textSelector(sourceLines[i]);
+            var nextText = i + 1 < sourceLines.Count
+                ? textSelector(sourceLines[i + 1])
+                : null;
+
+            if (IsLikelyQuestionHeaderLine(currentText, nextText, expectedQuestionRange))
+            {
+                firstHeaderIndex = i;
+                break;
+            }
+        }
+
+        if (firstHeaderIndex <= 0)
+        {
+            return sourceLines.ToArray();
+        }
+
+        return sourceLines.Skip(firstHeaderIndex).ToArray();
+    }
+
+    private static bool TryMatchQuestionHeader(
+        IReadOnlyList<ParsedLine> lines,
+        int lineIndex,
+        Regex regex,
+        QuestionNumberRange? expectedQuestionRange,
+        out int index)
+    {
+        index = 0;
+        if (lineIndex < 0 || lineIndex >= lines.Count)
+        {
+            return false;
+        }
+
+        var line = lines[lineIndex];
+        var nextLineText = lineIndex + 1 < lines.Count && lines[lineIndex + 1].PageIndex == line.PageIndex
+            ? lines[lineIndex + 1].Text
+            : null;
+
+        return TryMatchQuestionHeaderText(
+            line.Text,
+            nextLineText,
+            regex,
+            expectedQuestionRange,
+            out index);
+    }
+
+    private static bool IsLikelyQuestionHeaderLine(
+        string? text,
+        string? nextText,
+        QuestionNumberRange? expectedQuestionRange)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        return TryMatchQuestionHeaderText(
+            text,
+            nextText,
+            SingleLineHeaderRegex,
+            expectedQuestionRange,
+            out _);
+    }
+
+    private static bool TryMatchQuestionHeaderText(
+        string? text,
+        string? nextLineText,
+        Regex regex,
+        QuestionNumberRange? expectedQuestionRange,
+        out int index)
+    {
+        index = 0;
+        if (string.IsNullOrWhiteSpace(text) || IsDisallowedHeaderText(text))
+        {
+            return false;
+        }
+
+        var match = regex.Match(text);
+        if (!match.Success || !TryNormalizeQuestionIndex(match.Groups["index"].Value, out index))
+        {
+            return false;
+        }
+
+        if (expectedQuestionRange.HasValue && !expectedQuestionRange.Value.Contains(index))
+        {
+            return false;
+        }
+
+        var suffix = text.Substring(Math.Min(match.Length, text.Length)).Trim();
+        if (!IsPlausibleQuestionHeaderText(text, suffix, nextLineText))
+        {
+            index = 0;
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsDisallowedHeaderText(string text)
+    {
+        var normalized = text.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return true;
+        }
+
+        if (Regex.IsMatch(normalized, @"^\s*제\s*\d+\s*과목\s*$", RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(normalized, @"^\s*\d+\s*(?:학기|과목|교시)\s*$", RegexOptions.CultureInvariant) ||
+            Regex.IsMatch(normalized, @"^\s*\(?\d+\s*[-~〜]\s*.*번\)?\s*$", RegexOptions.CultureInvariant))
+        {
+            return true;
+        }
+
+        return normalized.Contains("출제위원", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Contains("출제범위", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsPlausibleQuestionHeaderText(
+        string fullText,
+        string suffix,
+        string? nextLineText)
+    {
+        if (IsDisallowedHeaderText(fullText))
+        {
+            return false;
+        }
+
+        if (Regex.IsMatch(suffix, @"^(?:학기|과목|교시)\b", RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        if (LooksLikeCodeLikeSuffix(suffix))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(suffix))
+        {
+            return CountHangulCharacters(suffix) >= 2 ||
+                   suffix.Contains('?') ||
+                   LooksLikeQuestionContinuation(nextLineText);
+        }
+
+        return LooksLikeQuestionContinuation(nextLineText);
+    }
+
+    private static bool LooksLikeCodeLikeSuffix(string suffix)
+    {
+        if (string.IsNullOrWhiteSpace(suffix))
+        {
+            return false;
+        }
+
+        var normalized = suffix.Trim();
+        if (Regex.IsMatch(normalized, @"^[A-Z0-9_+\-*/=().,:;]+$", RegexOptions.CultureInvariant))
+        {
+            return true;
+        }
+
+        return Regex.IsMatch(normalized, @"^\d+(?:\.\d+)?$", RegexOptions.CultureInvariant);
+    }
+
+    private static bool LooksLikeQuestionContinuation(string? nextLineText)
+    {
+        if (string.IsNullOrWhiteSpace(nextLineText) || IsDisallowedHeaderText(nextLineText))
+        {
+            return false;
+        }
+
+        var normalized = nextLineText.Trim();
+        if (Regex.IsMatch(normalized, @"^\d{1,3}\s*(?:[.)\]\-:：]|$)", RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        return CountHangulCharacters(normalized) >= 2 ||
+               normalized.Contains('?');
+    }
+
+    private static int CountHangulCharacters(string text)
+    {
+        return text.Count(c => c >= '가' && c <= '힣');
     }
 
     private static IReadOnlyList<OcrQuestionCandidate> SplitByHeuristic(
@@ -169,54 +566,14 @@ public static class OcrQuestionSegmenter
                 StartLineInPage = chunk[0].LineInPage,
                 EndLineInPage = chunk[^1].LineInPage,
                 StartPageLineCount = GetPageLineCount(pageLineCounts, chunk[0].PageIndex),
+                EndPageLineCount = GetPageLineCount(pageLineCounts, chunk[^1].PageIndex),
                 PreviewText = preview
             });
 
             index++;
         }
 
-        return ApplyRanges(roughCandidates, pageLineCounts, lines.Max(x => x.PageIndex));
-    }
-
-    private static IReadOnlyList<OcrQuestionCandidate> ApplyRanges(
-        IReadOnlyList<OcrQuestionCandidate> candidates,
-        IReadOnlyDictionary<int, int> pageLineCounts,
-        int totalPages)
-    {
-        var resolved = new List<OcrQuestionCandidate>(candidates.Count);
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var current = candidates[i];
-            var startPageLineCount = GetPageLineCount(pageLineCounts, current.StartPage);
-            var endPage = totalPages;
-            var endLineInPage = startPageLineCount;
-
-            if (i + 1 < candidates.Count)
-            {
-                var next = candidates[i + 1];
-                if (next.StartPage == current.StartPage)
-                {
-                    endPage = current.StartPage;
-                    endLineInPage = Math.Max(
-                        current.StartLineInPage,
-                        Math.Max(1, next.StartLineInPage - 1));
-                }
-                else
-                {
-                    endPage = next.StartPage;
-                    endLineInPage = startPageLineCount;
-                }
-            }
-
-            resolved.Add(current with
-            {
-                EndPage = endPage,
-                EndLineInPage = endLineInPage,
-                StartPageLineCount = startPageLineCount
-            });
-        }
-
-        return resolved;
+        return roughCandidates;
     }
 
     private static OcrQuestionCandidate FinalizeCurrent(
@@ -325,5 +682,12 @@ public static class OcrQuestionSegmenter
             $"후보 요약 | mode={mode} | count={candidates.Count} | top={string.Join(" || ", summary)}");
     }
 
-    private readonly record struct ParsedLine(int PageIndex, int LineInPage, string Text);
+    private readonly record struct ParsedLine(
+        int PageIndex,
+        int LineInPage,
+        string Text,
+        double LeftRatio = 0d,
+        double TopRatio = 0d,
+        double RightRatio = 1d,
+        double BottomRatio = 1d);
 }
