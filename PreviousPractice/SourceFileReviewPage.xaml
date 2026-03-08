@@ -6,86 +6,172 @@
              x:Class="PreviousPractice.SourceFileReviewPage"
              x:DataType="viewModels:SourceFileReviewViewModel"
              x:Name="ReviewPage"
-             Title="{Binding PageTitle}">
+             Title="{Binding PageTitle}"
+             BackgroundColor="#F8FAFC">
 
     <ContentPage.ToolbarItems>
         <ToolbarItem Text="진단" Clicked="OnOpenDiagnosticsClicked" />
     </ContentPage.ToolbarItems>
 
-    <Grid RowDefinitions="Auto,Auto,Auto,*,Auto" Padding="12" RowSpacing="12">
-        <VerticalStackLayout Grid.Row="0" Spacing="4">
-            <Label Text="{Binding HeaderText}" FontAttributes="Bold" LineBreakMode="TailTruncation" />
-            <Label Text="{Binding SummaryText}" FontSize="12" TextColor="#475569" />
-        </VerticalStackLayout>
-
-        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
-            <Button Grid.Column="0" Text="이전" Command="{Binding PreviousQuestionCommand}" IsEnabled="{Binding CanGoPrevious}" />
-            <VerticalStackLayout Grid.Column="1" Spacing="2">
-                <Label Text="{Binding CurrentQuestionDisplayTitle}" HorizontalTextAlignment="Center" FontAttributes="Bold" />
-                <Label Text="{Binding CurrentQuestionPositionText}" HorizontalTextAlignment="Center" FontSize="12" TextColor="#475569" />
-                <Label Text="{Binding CurrentAnswerDisplay}" HorizontalTextAlignment="Center" FontSize="12" TextColor="#475569" />
+    <Grid Padding="16" RowDefinitions="Auto,*" RowSpacing="16">
+        <Frame Grid.Row="0" Padding="16" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+            <VerticalStackLayout Spacing="6">
+                <Label Text="{Binding HeaderText}" FontAttributes="Bold" FontSize="20" LineBreakMode="TailTruncation" TextColor="#0F172A" />
+                <Label Text="{Binding SummaryText}" FontSize="12" TextColor="#475569" />
+                <Label Text="저장된 문제 이미지를 우선 확인하고, 구조 실패 원인은 상단 '진단'에서 분리해서 봅니다." FontSize="12" TextColor="#64748B" LineBreakMode="WordWrap" />
             </VerticalStackLayout>
-            <Button Grid.Column="2" Text="다음" Command="{Binding NextQuestionCommand}" IsEnabled="{Binding CanGoNext}" />
-        </Grid>
+        </Frame>
 
-        <CollectionView
-            Grid.Row="2"
-            ItemsSource="{Binding Questions}"
-            SelectionMode="Single"
-            SelectedItem="{Binding CurrentQuestion}"
-            ItemsLayout="HorizontalList"
-            HeightRequest="56"
-            EmptyView="저장된 문항이 없습니다.">
-            <CollectionView.ItemTemplate>
-                <DataTemplate x:DataType="models:Question">
-                    <Button
-                        Padding="12,6"
-                        Margin="0,0,8,0"
-                        Text="{Binding Index, StringFormat='{}{0}번'}"
-                        Command="{Binding Source={x:Reference ReviewPage}, Path=BindingContext.SelectQuestionCommand}"
-                        CommandParameter="{Binding}" />
-                </DataTemplate>
-            </CollectionView.ItemTemplate>
-        </CollectionView>
+        <Grid Grid.Row="1">
+            <Grid IsVisible="{Binding UseWideLayout}" ColumnDefinitions="280,*" ColumnSpacing="16">
+                <Frame Grid.Column="0" Padding="14" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+                    <VerticalStackLayout Spacing="12">
+                        <VerticalStackLayout Spacing="4">
+                            <Label Text="문항 목록" FontAttributes="Bold" FontSize="18" TextColor="#0F172A" />
+                            <Label Text="번호를 눌러 해당 문항으로 바로 이동합니다." FontSize="12" TextColor="#64748B" />
+                        </VerticalStackLayout>
 
-        <ScrollView Grid.Row="3">
+                        <CollectionView ItemsSource="{Binding Questions}"
+                                        SelectionMode="None"
+                                        EmptyView="저장된 문항이 없습니다.">
+                            <CollectionView.ItemTemplate>
+                                <DataTemplate x:DataType="models:Question">
+                                    <Frame Padding="12" Margin="0,0,0,10" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
+                                        <VerticalStackLayout Spacing="8">
+                                            <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                                                <Label Text="{Binding Index, StringFormat='{}{0}번'}" FontAttributes="Bold" TextColor="#0F172A" />
+                                                <Label Grid.Column="1" Text="{Binding CorrectAnswerDisplay}" TextColor="#0F766E" HorizontalTextAlignment="End" LineBreakMode="TailTruncation" />
+                                            </Grid>
+                                            <Label Text="{Binding Prompt}" FontSize="12" TextColor="#475569" LineBreakMode="TailTruncation" />
+                                            <Button Text="이 문제 보기"
+                                                    Command="{Binding Source={x:Reference ReviewPage}, Path=BindingContext.SelectQuestionCommand}"
+                                                    CommandParameter="{Binding}" />
+                                        </VerticalStackLayout>
+                                    </Frame>
+                                </DataTemplate>
+                            </CollectionView.ItemTemplate>
+                        </CollectionView>
+                    </VerticalStackLayout>
+                </Frame>
+
+                <Grid Grid.Column="1" RowDefinitions="Auto,*" RowSpacing="12">
+                    <Frame Grid.Row="0" Padding="14" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+                        <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                            <Button Grid.Column="0" Text="이전" Command="{Binding PreviousQuestionCommand}" IsEnabled="{Binding CanGoPrevious}" />
+                            <VerticalStackLayout Grid.Column="1" Spacing="2">
+                                <Label Text="{Binding CurrentQuestionDisplayTitle}" HorizontalTextAlignment="Center" FontAttributes="Bold" TextColor="#0F172A" />
+                                <Label Text="{Binding CurrentQuestionPositionText}" HorizontalTextAlignment="Center" FontSize="12" TextColor="#475569" />
+                                <Label Text="{Binding CurrentAnswerDisplay}" HorizontalTextAlignment="Center" FontSize="12" TextColor="#0F766E" />
+                            </VerticalStackLayout>
+                            <Button Grid.Column="2" Text="다음" Command="{Binding NextQuestionCommand}" IsEnabled="{Binding CanGoNext}" />
+                        </Grid>
+                    </Frame>
+
+                    <Frame Grid.Row="1" Padding="14" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+                        <ScrollView>
+                            <VerticalStackLayout Spacing="12">
+                                <VerticalStackLayout Spacing="8"
+                                                    IsVisible="{Binding HasCurrentQuestionImages}"
+                                                    BindableLayout.ItemsSource="{Binding CurrentQuestionImageSlices}">
+                                    <BindableLayout.ItemTemplate>
+                                        <DataTemplate x:DataType="viewModels:QuestionImageSliceViewModel">
+                                            <Grid WidthRequest="{Binding VisibleWidth}"
+                                                  HeightRequest="{Binding VisibleHeight}"
+                                                  IsClippedToBounds="True"
+                                                  HorizontalOptions="Center">
+                                                <Image Source="{Binding ImageSource}"
+                                                       WidthRequest="{Binding ContentWidth}"
+                                                       HeightRequest="{Binding ContentHeight}"
+                                                       TranslationX="{Binding TranslationX}"
+                                                       TranslationY="{Binding TranslationY}"
+                                                       HorizontalOptions="Start"
+                                                       VerticalOptions="Start"
+                                                       Aspect="AspectFit" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </BindableLayout.ItemTemplate>
+                                </VerticalStackLayout>
+
+                                <Label Text="{Binding CurrentQuestionText}"
+                                       IsVisible="{Binding ShowCurrentQuestionText}"
+                                       LineBreakMode="WordWrap"
+                                       TextColor="#0F172A" />
+                            </VerticalStackLayout>
+                        </ScrollView>
+                    </Frame>
+                </Grid>
+            </Grid>
+
             <VerticalStackLayout Spacing="12">
-                <VerticalStackLayout
-                    Spacing="8"
-                    IsVisible="{Binding HasCurrentQuestionImages}"
-                    BindableLayout.ItemsSource="{Binding CurrentQuestionImageSlices}">
-                    <BindableLayout.ItemTemplate>
-                        <DataTemplate x:DataType="viewModels:QuestionImageSliceViewModel">
-                            <Grid
-                                WidthRequest="{Binding VisibleWidth}"
-                                HeightRequest="{Binding VisibleHeight}"
-                                IsClippedToBounds="True"
-                                HorizontalOptions="Center">
-                                <Image
-                                    Source="{Binding ImageSource}"
-                                    WidthRequest="{Binding ContentWidth}"
-                                    HeightRequest="{Binding ContentHeight}"
-                                    TranslationX="{Binding TranslationX}"
-                                    TranslationY="{Binding TranslationY}"
-                                    HorizontalOptions="Start"
-                                    VerticalOptions="Start"
-                                    Aspect="AspectFit" />
-                            </Grid>
-                        </DataTemplate>
-                    </BindableLayout.ItemTemplate>
-                </VerticalStackLayout>
+                <VerticalStackLayout.Triggers>
+                    <DataTrigger TargetType="VerticalStackLayout" Binding="{Binding UseWideLayout}" Value="True">
+                        <Setter Property="IsVisible" Value="False" />
+                    </DataTrigger>
+                </VerticalStackLayout.Triggers>
 
-                <Label
-                    Text="{Binding CurrentQuestionText}"
-                    IsVisible="{Binding ShowCurrentQuestionText}"
-                    LineBreakMode="WordWrap" />
+                <Frame Padding="14" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+                    <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                        <Button Grid.Column="0" Text="이전" Command="{Binding PreviousQuestionCommand}" IsEnabled="{Binding CanGoPrevious}" />
+                        <VerticalStackLayout Grid.Column="1" Spacing="2">
+                            <Label Text="{Binding CurrentQuestionDisplayTitle}" HorizontalTextAlignment="Center" FontAttributes="Bold" TextColor="#0F172A" />
+                            <Label Text="{Binding CurrentQuestionPositionText}" HorizontalTextAlignment="Center" FontSize="12" TextColor="#475569" />
+                            <Label Text="{Binding CurrentAnswerDisplay}" HorizontalTextAlignment="Center" FontSize="12" TextColor="#0F766E" />
+                        </VerticalStackLayout>
+                        <Button Grid.Column="2" Text="다음" Command="{Binding NextQuestionCommand}" IsEnabled="{Binding CanGoNext}" />
+                    </Grid>
+                </Frame>
+
+                <Frame Padding="10" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+                    <CollectionView ItemsSource="{Binding Questions}"
+                                    SelectionMode="None"
+                                    ItemsLayout="HorizontalList"
+                                    HeightRequest="72"
+                                    EmptyView="저장된 문항이 없습니다.">
+                        <CollectionView.ItemTemplate>
+                            <DataTemplate x:DataType="models:Question">
+                                <Button Padding="12,8"
+                                        Margin="0,0,8,0"
+                                        Text="{Binding Index, StringFormat='{}{0}번'}"
+                                        Command="{Binding Source={x:Reference ReviewPage}, Path=BindingContext.SelectQuestionCommand}"
+                                        CommandParameter="{Binding}" />
+                            </DataTemplate>
+                        </CollectionView.ItemTemplate>
+                    </CollectionView>
+                </Frame>
+
+                <Frame Padding="14" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+                    <ScrollView>
+                        <VerticalStackLayout Spacing="12">
+                            <VerticalStackLayout Spacing="8"
+                                                IsVisible="{Binding HasCurrentQuestionImages}"
+                                                BindableLayout.ItemsSource="{Binding CurrentQuestionImageSlices}">
+                                <BindableLayout.ItemTemplate>
+                                    <DataTemplate x:DataType="viewModels:QuestionImageSliceViewModel">
+                                        <Grid WidthRequest="{Binding VisibleWidth}"
+                                              HeightRequest="{Binding VisibleHeight}"
+                                              IsClippedToBounds="True"
+                                              HorizontalOptions="Center">
+                                            <Image Source="{Binding ImageSource}"
+                                                   WidthRequest="{Binding ContentWidth}"
+                                                   HeightRequest="{Binding ContentHeight}"
+                                                   TranslationX="{Binding TranslationX}"
+                                                   TranslationY="{Binding TranslationY}"
+                                                   HorizontalOptions="Start"
+                                                   VerticalOptions="Start"
+                                                   Aspect="AspectFit" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </BindableLayout.ItemTemplate>
+                            </VerticalStackLayout>
+
+                            <Label Text="{Binding CurrentQuestionText}"
+                                   IsVisible="{Binding ShowCurrentQuestionText}"
+                                   LineBreakMode="WordWrap"
+                                   TextColor="#0F172A" />
+                        </VerticalStackLayout>
+                    </ScrollView>
+                </Frame>
             </VerticalStackLayout>
-        </ScrollView>
-
-        <Label
-            Grid.Row="4"
-            Text="문항 이미지를 우선 표시합니다. 분석 진단은 상단 '진단'에서 확인합니다."
-            FontSize="12"
-            TextColor="#64748B" />
+        </Grid>
     </Grid>
 </ContentPage>

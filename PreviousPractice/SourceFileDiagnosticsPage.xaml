@@ -2,11 +2,31 @@
 <ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="PreviousPractice.SourceFileDiagnosticsPage"
-             Title="분석 진단">
-    <Grid Padding="12">
-        <Editor x:Name="DiagnosticsEditor"
-                IsReadOnly="True"
-                AutoSize="Disabled"
-                FontFamily="OpenSansRegular" />
+             Title="분석 진단"
+             BackgroundColor="#F8FAFC">
+    <Grid Padding="16" RowDefinitions="Auto,Auto,*" RowSpacing="12">
+        <Frame Grid.Row="0" Padding="14" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+            <VerticalStackLayout Spacing="4">
+                <Label Text="분석 진단" FontAttributes="Bold" FontSize="20" TextColor="#0F172A" />
+                <Label Text="OCR 분석 결과와 구조 검증 로그를 원문 그대로 보여줍니다." FontSize="12" TextColor="#64748B" />
+            </VerticalStackLayout>
+        </Frame>
+
+        <Frame Grid.Row="1" Padding="12" BorderColor="#BFDBFE" BackgroundColor="#EFF6FF" HasShadow="False">
+            <Label Text="저장 실패 원인을 확인할 때 사용하는 화면입니다. 문제 이미지 검토는 이전 화면에서 진행하고, 여기서는 실패 원인과 누락 번호를 보시면 됩니다."
+                   FontSize="12"
+                   TextColor="#1D4ED8"
+                   LineBreakMode="WordWrap" />
+        </Frame>
+
+        <Frame Grid.Row="2" Padding="0" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+            <Editor x:Name="DiagnosticsEditor"
+                    Margin="12"
+                    IsReadOnly="True"
+                    AutoSize="Disabled"
+                    FontFamily="OpenSansRegular"
+                    TextColor="#0F172A"
+                    BackgroundColor="#FFFFFF" />
+        </Frame>
     </Grid>
 </ContentPage>

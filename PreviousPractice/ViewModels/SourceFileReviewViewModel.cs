@@ -135,6 +135,10 @@ public sealed class SourceFileReviewViewModel : ViewModelBase
         Questions.IndexOf(CurrentQuestion) >= 0 &&
         Questions.IndexOf(CurrentQuestion) < Questions.Count - 1;
 
+    public bool UseWideLayout =>
+        DeviceInfo.Idiom == DeviceIdiom.Desktop ||
+        DeviceInfo.Idiom == DeviceIdiom.Tablet;
+
     private async Task LoadAsync()
     {
         try

@@ -40,6 +40,7 @@ public class MainViewModel : ViewModelBase
     private string feedback = string.Empty;
     private string sessionFeedback = string.Empty;
     private string userAnswer = string.Empty;
+    private string selectedWorkspaceSection = WorkspaceSectionImport;
     private bool isPracticeRunning;
     private bool overwriteExisting;
     private Category? selectedCategory;
@@ -63,6 +64,9 @@ public class MainViewModel : ViewModelBase
     private const double MinQuestionImageSliceWidthRatio = 0.08d;
     private const double QuestionImageCropPaddingRatio = 0.015d;
     private const int MalformedSharedContextFallbackQuestionCount = 3;
+    private const string WorkspaceSectionImport = "import";
+    private const string WorkspaceSectionPractice = "practice";
+    private const string WorkspaceSectionWrong = "wrong";
     private static readonly char[] QuestionRangeSeparators = ['-', '~', '〜'];
     private static readonly Regex QuestionRangeHintRegex = new(
         @"(?<!\d)(?<start>\d{1,3})\s*[-~〜]\s*(?<end>\d{1,3})\s*(?:번|문항|문제)?(?!\d)",
@@ -94,7 +98,13 @@ public class MainViewModel : ViewModelBase
     public string PdfAnalysisSummary
     {
         get => pdfAnalysisSummary;
-        set => SetProperty(ref pdfAnalysisSummary, value);
+        set
+        {
+            if (SetProperty(ref pdfAnalysisSummary, value))
+            {
+                OnPropertyChanged(nameof(HasPdfAnalysisSummary));
+            }
+        }
     }
 
     public string PdfAnalysisStatus
@@ -220,8 +230,51 @@ public class MainViewModel : ViewModelBase
     public string Feedback
     {
         get => feedback;
-        set => SetProperty(ref feedback, value);
+        set
+        {
+            if (SetProperty(ref feedback, value))
+            {
+                OnPropertyChanged(nameof(HasFeedback));
+            }
+        }
     }
+
+    public bool HasFeedback => !string.IsNullOrWhiteSpace(Feedback);
+
+    public string SelectedWorkspaceSection
+    {
+        get => selectedWorkspaceSection;
+        private set
+        {
+            if (SetProperty(ref selectedWorkspaceSection, value))
+            {
+                OnPropertyChanged(nameof(IsImportWorkspaceSelected));
+                OnPropertyChanged(nameof(IsPracticeWorkspaceSelected));
+                OnPropertyChanged(nameof(IsWrongWorkspaceSelected));
+                OnPropertyChanged(nameof(ShowImportWorkspace));
+                OnPropertyChanged(nameof(ShowPracticeWorkspace));
+                OnPropertyChanged(nameof(ShowWrongWorkspace));
+            }
+        }
+    }
+
+    public bool IsImportWorkspaceSelected => SelectedWorkspaceSection == WorkspaceSectionImport;
+
+    public bool IsPracticeWorkspaceSelected => SelectedWorkspaceSection == WorkspaceSectionPractice;
+
+    public bool IsWrongWorkspaceSelected => SelectedWorkspaceSection == WorkspaceSectionWrong;
+
+    public bool ShowImportWorkspace => IsImportWorkspaceSelected;
+
+    public bool ShowPracticeWorkspace => IsPracticeWorkspaceSelected;
+
+    public bool ShowWrongWorkspace => IsWrongWorkspaceSelected;
+
+    public bool UseWideWorkspaceLayout =>
+        DeviceInfo.Idiom == DeviceIdiom.Desktop ||
+        DeviceInfo.Idiom == DeviceIdiom.Tablet;
+
+    public bool HasPdfAnalysisSummary => !string.IsNullOrWhiteSpace(PdfAnalysisSummary);
 
     public string SessionFeedback
     {
@@ -448,6 +501,9 @@ public class MainViewModel : ViewModelBase
     public RelayCommand LoadAnswerFileCommand { get; }
     public RelayCommand LoadSourceFilesFromDirectoryCommand { get; }
     public RelayCommand ImportSourceFileCommand { get; }
+    public RelayCommand ShowImportWorkspaceCommand { get; }
+    public RelayCommand ShowPracticeWorkspaceCommand { get; }
+    public RelayCommand ShowWrongWorkspaceCommand { get; }
 
     public MainViewModel() : this(new PracticeRepository(), new PdfAnalysisService())
     {
@@ -471,6 +527,9 @@ public class MainViewModel : ViewModelBase
         LoadAnswerFileCommand = new RelayCommand(async void () => await LoadAnswerFileAsync());
         LoadSourceFilesFromDirectoryCommand = new RelayCommand(async void () => await LoadSourceFilesFromDirectoryAsync());
         ImportSourceFileCommand = new RelayCommand(async void () => await ImportSourceFileAsync());
+        ShowImportWorkspaceCommand = new RelayCommand(() => SetWorkspaceSection(WorkspaceSectionImport));
+        ShowPracticeWorkspaceCommand = new RelayCommand(() => SetWorkspaceSection(WorkspaceSectionPractice));
+        ShowWrongWorkspaceCommand = new RelayCommand(() => SetWorkspaceSection(WorkspaceSectionWrong));
 
         _ = InitializeAsync();
     }
@@ -545,6 +604,8 @@ public class MainViewModel : ViewModelBase
 
     private async Task ImportAnswerMapAsync()
     {
+        SetWorkspaceSection(WorkspaceSectionImport);
+
         if (SelectedCategory == null)
         {
             Feedback = "카테고리를 선택해 주세요.";
@@ -1965,6 +2026,7 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
+        SetWorkspaceSection(WorkspaceSectionPractice);
         currentSession = questions.OrderBy(_ => random.Next()).ToList();
         SessionTotalCount = currentSession.Count;
         SessionCurrentIndex = 0;
@@ -2284,6 +2346,16 @@ public class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(HasSelectedCategory));
         OnPropertyChanged(nameof(CanDeleteCategory));
         OnPropertyChanged(nameof(CanDeleteSourceFile));
+    }
+
+    private void SetWorkspaceSection(string section)
+    {
+        if (string.IsNullOrWhiteSpace(section))
+        {
+            return;
+        }
+
+        SelectedWorkspaceSection = section;
     }
 
     private static (PdfOcrResult Analysis, PdfAnalysisDiagnostics Diagnostics) TryAutoRepairAnalysis(
