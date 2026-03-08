@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.IO;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using PreviousPractice.Core;
 using PreviousPractice.Data;
 using PreviousPractice.Infrastructure;
@@ -61,6 +62,14 @@ public class MainViewModel : ViewModelBase
     private const double MinQuestionImageSliceRatio = 0.02d;
     private const double MinQuestionImageSliceWidthRatio = 0.08d;
     private const double QuestionImageCropPaddingRatio = 0.015d;
+    private const int MalformedSharedContextFallbackQuestionCount = 3;
+    private static readonly char[] QuestionRangeSeparators = ['-', '~', '〜'];
+    private static readonly Regex QuestionRangeHintRegex = new(
+        @"(?<!\d)(?<start>\d{1,3})\s*[-~〜]\s*(?<end>\d{1,3})\s*(?:번|문항|문제)?(?!\d)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SharedContextRangeStartRegex = new(
+        @"(?<!\d)(?<start>\d{1,3})\s*[-~〜]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public ObservableCollection<Category> Categories { get; } = new();
     public ObservableCollection<SourceFileSummary> SourceFiles { get; } = new();
@@ -528,12 +537,12 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        if (!TryParseExpectedQuestionRange(
+        if (!TryParseExpectedQuestionInput(
                 ExpectedQuestionRangeText,
-                out var expectedQuestionRange,
-                out var expectedQuestionRangeError))
+                out var expectedQuestionInput,
+                out var expectedQuestionInputError))
         {
-            Feedback = expectedQuestionRangeError;
+            Feedback = expectedQuestionInputError;
             return;
         }
 
@@ -569,7 +578,10 @@ public class MainViewModel : ViewModelBase
         try
         {
             var progress = new Progress<PdfAnalysisProgress>(UpdatePdfAnalysisProgress);
-            var analysis = await pdfAnalysisService.AnalyzePdfAsync(sourceFilePath, progress, expectedQuestionRange);
+            var analysis = await pdfAnalysisService.AnalyzePdfAsync(
+                sourceFilePath,
+                progress,
+                expectedQuestionInput.ExplicitRange);
             if (!analysis.IsSuccess)
             {
                 PdfAnalysisSummary = $"문항 분석 실패: {analysis.Message}";
@@ -586,13 +598,34 @@ public class MainViewModel : ViewModelBase
                 nameof(MainViewModel),
                 $"문항 분석 성공 | file={sourceFilePath} | pages={analysis.PageCount} | candidates={analysis.DetectedQuestionCount}");
 
+            var resolvedExpectedQuestionRange = ResolveExpectedQuestionRange(analysis, expectedQuestionInput);
+            if (resolvedExpectedQuestionRange.IsAutoInferred &&
+                resolvedExpectedQuestionRange.Range is QuestionNumberRange inferredRange)
+            {
+                var refinedCandidates = OcrQuestionSegmenter.SplitByHeader(analysis.Pages, inferredRange);
+                analysis = WithQuestionCandidates(analysis, refinedCandidates);
+                AppLog.Info(
+                    nameof(MainViewModel),
+                    $"문항 범위 자동 추정 | file={sourceFilePath} | count={resolvedExpectedQuestionRange.ExpectedCount} | range={inferredRange} | reason={resolvedExpectedQuestionRange.Reason}");
+            }
+            else if (expectedQuestionInput.IsCountOnly)
+            {
+                AppLog.Error(
+                    nameof(MainViewModel),
+                    $"문항 범위 자동 추정 실패 | file={sourceFilePath} | count={expectedQuestionInput.ExpectedCount} | reason={resolvedExpectedQuestionRange.Reason}");
+            }
+
             UpdatePdfAnalysisProgress(new PdfAnalysisProgress(
                 analysis.PageCount,
                 analysis.PageCount,
                 "문항 데이터 저장 중"));
 
             await SavePdfAnalysisAsync(normalizedSourceFileName, analysis);
-            var diagnostics = BuildPdfAnalysisDiagnostics(normalizedSourceFileName, analysis, expectedQuestionRange);
+            var diagnostics = BuildPdfAnalysisDiagnostics(
+                normalizedSourceFileName,
+                analysis,
+                expectedQuestionInput,
+                resolvedExpectedQuestionRange);
             var diagnosticsPath = await SavePdfAnalysisDiagnosticsAsync(normalizedSourceFileName, diagnostics);
             PdfAnalysisSummary = BuildAnalysisSummary(analysis, diagnostics);
             PdfAnalysisStatus = "문항 분석이 완료되었습니다.";
@@ -607,7 +640,7 @@ public class MainViewModel : ViewModelBase
                            (string.IsNullOrWhiteSpace(diagnosticsPath) ? string.Empty : $"\n진단 파일: {diagnosticsPath}");
                 AppLog.Error(
                     nameof(MainViewModel),
-                    $"문항 반영 중단 | expectedRange={diagnostics.ExpectedQuestionRange?.ToString() ?? "n/a"} | detected={diagnostics.DistinctCandidateCount} | missing={string.Join(",", diagnostics.MissingIndexes)} | unexpected={string.Join(",", diagnostics.UnexpectedIndexes)} | duplicates={string.Join(",", diagnostics.DuplicateIndexes.Select(x => x.Index))} | diag={diagnosticsPath ?? "n/a"}");
+                    $"문항 반영 중단 | expectedCount={diagnostics.ExpectedQuestionCount?.ToString() ?? "n/a"} | expectedRange={diagnostics.ExpectedQuestionRange?.ToString() ?? "n/a"} | detected={diagnostics.DistinctCandidateCount} | missing={string.Join(",", diagnostics.MissingIndexes)} | unexpected={string.Join(",", diagnostics.UnexpectedIndexes)} | duplicates={string.Join(",", diagnostics.DuplicateIndexes.Select(x => x.Index))} | diag={diagnosticsPath ?? "n/a"}");
                 return;
             }
 
@@ -666,6 +699,13 @@ public class MainViewModel : ViewModelBase
                         analysis.QuestionCandidates,
                         analysis.Pages);
                     var primaryImageSegment = imageSegments.FirstOrDefault();
+
+                    if (matchedCandidate != null && imageSegments.Length > 1)
+                    {
+                        AppLog.Info(
+                            nameof(MainViewModel),
+                            $"공유 지문 세그먼트 적용 | file={normalizedSourceFileName} | index={x} | segments={imageSegments.Length} | start=p{matchedCandidate.StartPage}:{matchedCandidate.StartLineInPage}");
+                    }
 
                     var question = new Question
                     {
@@ -774,6 +814,7 @@ public class MainViewModel : ViewModelBase
             .Where(x => !string.IsNullOrWhiteSpace(x.ImagePath))
             .ToDictionary(x => x.PageIndex, x => x);
 
+        var sharedSegments = BuildSharedContextImageSegments(candidate, allCandidates, pageByIndex);
         var segments = new List<QuestionImageSegment>();
         for (var pageIndex = candidate.StartPage; pageIndex <= candidate.EndPage; pageIndex++)
         {
@@ -858,20 +899,208 @@ public class MainViewModel : ViewModelBase
             right = EnsureMinimumSpan(left, right, MinQuestionImageSliceWidthRatio);
             bottom = EnsureMinimumSpan(top, bottom, MinQuestionImageSliceRatio);
 
-            segments.Add(new QuestionImageSegment
-            {
-                PageIndex = pageIndex,
-                ImagePath = page.ImagePath,
-                ImageLeftRatio = left,
-                ImageTopRatio = top,
-                ImageRightRatio = right,
-                ImageBottomRatio = bottom,
-                ImagePixelWidth = page.ImagePixelWidth,
-                ImagePixelHeight = page.ImagePixelHeight
-            });
+            segments.Add(CreateQuestionImageSegment(page, left, top, right, bottom));
         }
 
-        return segments.ToArray();
+        return sharedSegments
+            .Concat(segments)
+            .GroupBy(x => $"{x.PageIndex}:{x.ImageLeftRatio:F4}:{x.ImageTopRatio:F4}:{x.ImageRightRatio:F4}:{x.ImageBottomRatio:F4}")
+            .Select(x => x.First())
+            .ToArray();
+    }
+
+    private static QuestionImageSegment[] BuildSharedContextImageSegments(
+        OcrQuestionCandidate candidate,
+        IReadOnlyList<OcrQuestionCandidate> allCandidates,
+        IReadOnlyDictionary<int, OcrPageResult> pageByIndex)
+    {
+        if (!pageByIndex.TryGetValue(candidate.StartPage, out var page) ||
+            page.Lines == null ||
+            page.Lines.Count == 0 ||
+            !TryGetLine(pageByIndex, candidate.StartPage, candidate.StartLineInPage, out var anchorLine) ||
+            anchorLine == null)
+        {
+            return Array.Empty<QuestionImageSegment>();
+        }
+
+        var sharedContext = ResolveSharedContextDefinition(candidate, allCandidates, page.Lines, anchorLine);
+        if (sharedContext == null)
+        {
+            return Array.Empty<QuestionImageSegment>();
+        }
+
+        var contextLines = page.Lines
+            .Where(x =>
+                x.LineInPage >= sharedContext.Value.ContextStartLine &&
+                x.LineInPage < sharedContext.Value.QuestionStartLine &&
+                !string.IsNullOrWhiteSpace(x.Text) &&
+                IsSameColumnLine(x, anchorLine))
+            .OrderBy(x => x.LineInPage)
+            .ToArray();
+        if (contextLines.Length == 0)
+        {
+            return Array.Empty<QuestionImageSegment>();
+        }
+
+        var sharedSegment = BuildImageSegmentFromLines(page, contextLines, contextLines[0]);
+        return sharedSegment == null
+            ? Array.Empty<QuestionImageSegment>()
+            : new[] { sharedSegment };
+    }
+
+    private static SharedContextDefinition? ResolveSharedContextDefinition(
+        OcrQuestionCandidate candidate,
+        IReadOnlyList<OcrQuestionCandidate> allCandidates,
+        IReadOnlyList<OcrLineResult> pageLines,
+        OcrLineResult anchorLine)
+    {
+        var samePageCandidates = allCandidates
+            .Where(x => x.StartPage == candidate.StartPage && x.Index > 0)
+            .OrderBy(x => x.StartLineInPage)
+            .ToArray();
+        if (samePageCandidates.Length == 0)
+        {
+            return null;
+        }
+
+        for (var lineIndex = candidate.StartLineInPage - 1; lineIndex >= 1; lineIndex--)
+        {
+            var markerLine = pageLines.FirstOrDefault(x => x.LineInPage == lineIndex);
+            if (markerLine == null ||
+                string.IsNullOrWhiteSpace(markerLine.Text) ||
+                !IsSameColumnLine(markerLine, anchorLine))
+            {
+                continue;
+            }
+
+            if (!TryResolveSharedContextRange(markerLine.Text, candidate.Index, out var sharedRange))
+            {
+                continue;
+            }
+
+            var firstCandidateInRange = samePageCandidates
+                .Where(x => sharedRange.Contains(x.Index))
+                .OrderBy(x => x.StartLineInPage)
+                .FirstOrDefault();
+            if (firstCandidateInRange == null ||
+                firstCandidateInRange.StartLineInPage <= markerLine.LineInPage)
+            {
+                continue;
+            }
+
+            return new SharedContextDefinition(
+                sharedRange,
+                markerLine.LineInPage,
+                firstCandidateInRange.StartLineInPage);
+        }
+
+        return null;
+    }
+
+    private static bool TryResolveSharedContextRange(
+        string? text,
+        int currentIndex,
+        out QuestionNumberRange questionRange)
+    {
+        questionRange = default;
+        if (!LooksLikeSharedContextMarkerText(text))
+        {
+            return false;
+        }
+
+        var normalized = text!.Trim();
+        var explicitMatch = QuestionRangeHintRegex.Match(normalized);
+        if (explicitMatch.Success &&
+            int.TryParse(explicitMatch.Groups["start"].Value, out var explicitStart) &&
+            int.TryParse(explicitMatch.Groups["end"].Value, out var explicitEnd) &&
+            explicitStart > 0 &&
+            explicitEnd >= explicitStart)
+        {
+            questionRange = new QuestionNumberRange(explicitStart, explicitEnd);
+            return questionRange.Contains(currentIndex);
+        }
+
+        var startOnlyMatch = SharedContextRangeStartRegex.Match(normalized);
+        if (!startOnlyMatch.Success ||
+            !int.TryParse(startOnlyMatch.Groups["start"].Value, out var inferredStart) ||
+            inferredStart <= 0)
+        {
+            return false;
+        }
+
+        questionRange = new QuestionNumberRange(
+            inferredStart,
+            inferredStart + MalformedSharedContextFallbackQuestionCount - 1);
+        return questionRange.Contains(currentIndex);
+    }
+
+    private static bool LooksLikeSharedContextMarkerText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var normalized = text.Trim();
+        if (!normalized.Contains("다음", StringComparison.Ordinal) &&
+            !normalized.Contains("답하라", StringComparison.Ordinal) &&
+            !normalized.Contains("보고", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return normalized.IndexOfAny(QuestionRangeSeparators) >= 0;
+    }
+
+    private static QuestionImageSegment? BuildImageSegmentFromLines(
+        OcrPageResult page,
+        IReadOnlyList<OcrLineResult> segmentLines,
+        OcrLineResult anchorLine)
+    {
+        if (string.IsNullOrWhiteSpace(page.ImagePath) || segmentLines.Count == 0)
+        {
+            return null;
+        }
+
+        var horizontalCropLines = segmentLines
+            .Where(x => IsHorizontalCropLine(x, anchorLine))
+            .ToArray();
+        var cropLines = horizontalCropLines.Length > 0
+            ? horizontalCropLines
+            : segmentLines.ToArray();
+
+        var left = ClampRatio(cropLines.Min(x => x.LeftRatio) - QuestionImageCropPaddingRatio);
+        var top = ClampRatio(segmentLines.Min(x => x.TopRatio) - QuestionImageCropPaddingRatio);
+        var right = EnsureMinimumSpan(
+            left,
+            ClampRatio(cropLines.Max(x => x.RightRatio) + QuestionImageCropPaddingRatio),
+            MinQuestionImageSliceWidthRatio);
+        var bottom = EnsureMinimumSpan(
+            top,
+            ClampRatio(segmentLines.Max(x => x.BottomRatio) + QuestionImageCropPaddingRatio),
+            MinQuestionImageSliceRatio);
+
+        return CreateQuestionImageSegment(page, left, top, right, bottom);
+    }
+
+    private static QuestionImageSegment CreateQuestionImageSegment(
+        OcrPageResult page,
+        double left,
+        double top,
+        double right,
+        double bottom)
+    {
+        return new QuestionImageSegment
+        {
+            PageIndex = page.PageIndex,
+            ImagePath = page.ImagePath,
+            ImageLeftRatio = left,
+            ImageTopRatio = top,
+            ImageRightRatio = right,
+            ImageBottomRatio = bottom,
+            ImagePixelWidth = page.ImagePixelWidth,
+            ImagePixelHeight = page.ImagePixelHeight
+        };
     }
 
     private static OcrLineResult? ResolveAnchorLine(
@@ -1258,12 +1487,12 @@ public class MainViewModel : ViewModelBase
         return new string(baseName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
     }
 
-    private static bool TryParseExpectedQuestionRange(
+    private static bool TryParseExpectedQuestionInput(
         string? rawValue,
-        out QuestionNumberRange? expectedQuestionRange,
+        out ExpectedQuestionInput expectedQuestionInput,
         out string errorMessage)
     {
-        expectedQuestionRange = null;
+        expectedQuestionInput = ExpectedQuestionInput.Empty;
         errorMessage = string.Empty;
 
         if (string.IsNullOrWhiteSpace(rawValue))
@@ -1272,18 +1501,17 @@ public class MainViewModel : ViewModelBase
         }
 
         var normalized = rawValue.Trim();
-        var separators = new[] { '-', '~', '〜' };
-        var separatorIndex = normalized.IndexOfAny(separators);
+        var separatorIndex = normalized.IndexOfAny(QuestionRangeSeparators);
 
         if (separatorIndex < 0)
         {
             if (!int.TryParse(normalized, out var count) || count <= 0)
             {
-                errorMessage = "예상 문항 범위는 `25` 또는 `31-55` 형식으로 입력해 주세요.";
+                errorMessage = "예상 문항 입력은 `25` 또는 `31-55` 형식으로 입력해 주세요.";
                 return false;
             }
 
-            expectedQuestionRange = new QuestionNumberRange(1, count);
+            expectedQuestionInput = ExpectedQuestionInput.FromCount(normalized, count);
             return true;
         }
 
@@ -1295,7 +1523,7 @@ public class MainViewModel : ViewModelBase
             startIndex <= 0 ||
             endIndex <= 0)
         {
-            errorMessage = "예상 문항 범위는 `25` 또는 `31-55` 형식으로 입력해 주세요.";
+            errorMessage = "예상 문항 입력은 `25` 또는 `31-55` 형식으로 입력해 주세요.";
             return false;
         }
 
@@ -1305,8 +1533,250 @@ public class MainViewModel : ViewModelBase
             return false;
         }
 
-        expectedQuestionRange = new QuestionNumberRange(startIndex, endIndex);
+        expectedQuestionInput = ExpectedQuestionInput.FromRange(
+            normalized,
+            new QuestionNumberRange(startIndex, endIndex));
         return true;
+    }
+
+    private static ExpectedQuestionRangeResolution ResolveExpectedQuestionRange(
+        PdfOcrResult analysis,
+        ExpectedQuestionInput expectedQuestionInput)
+    {
+        if (!expectedQuestionInput.HasValue)
+        {
+            return ExpectedQuestionRangeResolution.None;
+        }
+
+        if (expectedQuestionInput.ExplicitRange is QuestionNumberRange explicitRange)
+        {
+            return new ExpectedQuestionRangeResolution(
+                explicitRange,
+                expectedQuestionInput.ExpectedCount,
+                IsAutoInferred: false,
+                "직접 입력한 범위를 사용했습니다.");
+        }
+
+        var expectedCount = expectedQuestionInput.ExpectedCount;
+        if (expectedCount <= 0)
+        {
+            return new ExpectedQuestionRangeResolution(
+                null,
+                expectedCount,
+                IsAutoInferred: true,
+                "입력한 문항 수가 올바르지 않습니다.");
+        }
+
+        if (TryFindExpectedQuestionRangeHint(analysis.Pages, expectedCount, out var hintedRange, out var hintedReason))
+        {
+            return new ExpectedQuestionRangeResolution(
+                hintedRange,
+                expectedCount,
+                IsAutoInferred: true,
+                hintedReason);
+        }
+
+        if (TryInferExpectedQuestionRangeFromCandidates(
+                analysis.QuestionCandidates,
+                expectedCount,
+                out var inferredRange,
+                out var inferredReason))
+        {
+            return new ExpectedQuestionRangeResolution(
+                inferredRange,
+                expectedCount,
+                IsAutoInferred: true,
+                inferredReason);
+        }
+
+        return new ExpectedQuestionRangeResolution(
+            null,
+            expectedCount,
+            IsAutoInferred: true,
+            $"입력한 문항 수 {expectedCount}개에 맞는 시작 번호를 OCR 결과에서 찾지 못했습니다.");
+    }
+
+    private static bool TryFindExpectedQuestionRangeHint(
+        IReadOnlyList<OcrPageResult> pages,
+        int expectedCount,
+        out QuestionNumberRange expectedQuestionRange,
+        out string reason)
+    {
+        expectedQuestionRange = default;
+        reason = string.Empty;
+
+        if (expectedCount <= 0)
+        {
+            return false;
+        }
+
+        foreach (var line in EnumerateQuestionRangeHintLines(pages))
+        {
+            foreach (Match match in QuestionRangeHintRegex.Matches(line.Text))
+            {
+                if (!int.TryParse(match.Groups["start"].Value, out var startIndex) ||
+                    !int.TryParse(match.Groups["end"].Value, out var endIndex) ||
+                    startIndex <= 0 ||
+                    endIndex < startIndex)
+                {
+                    continue;
+                }
+
+                var range = new QuestionNumberRange(startIndex, endIndex);
+                if (range.Count != expectedCount)
+                {
+                    continue;
+                }
+
+                expectedQuestionRange = range;
+                reason = $"페이지 {line.PageIndex} 줄 {line.LineInPage} 범위 표기 `{match.Value.Trim()}`를 사용했습니다.";
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<PageLineText> EnumerateQuestionRangeHintLines(IReadOnlyList<OcrPageResult> pages)
+    {
+        foreach (var page in pages.OrderBy(x => x.PageIndex))
+        {
+            if (page.Lines != null && page.Lines.Count > 0)
+            {
+                foreach (var line in page.Lines
+                             .OrderBy(x => x.LineInPage)
+                             .Take(12)
+                             .Where(x => !string.IsNullOrWhiteSpace(x.Text)))
+                {
+                    yield return new PageLineText(page.PageIndex, line.LineInPage, line.Text.Trim());
+                }
+
+                continue;
+            }
+
+            var textLines = page.Text
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Take(12)
+                .ToArray();
+
+            for (var index = 0; index < textLines.Length; index++)
+            {
+                yield return new PageLineText(page.PageIndex, index + 1, textLines[index]);
+            }
+        }
+    }
+
+    private static bool TryInferExpectedQuestionRangeFromCandidates(
+        IReadOnlyList<OcrQuestionCandidate> questionCandidates,
+        int expectedCount,
+        out QuestionNumberRange expectedQuestionRange,
+        out string reason)
+    {
+        expectedQuestionRange = default;
+        reason = string.Empty;
+
+        if (expectedCount <= 0)
+        {
+            return false;
+        }
+
+        var candidateIndexes = questionCandidates
+            .Where(x => x.Index > 0)
+            .Select(x => x.Index)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToArray();
+
+        if (candidateIndexes.Length == 0)
+        {
+            return false;
+        }
+
+        var possibleStarts = new HashSet<int>();
+        foreach (var candidateIndex in candidateIndexes)
+        {
+            for (var offset = 0; offset < expectedCount; offset++)
+            {
+                var startIndex = candidateIndex - offset;
+                if (startIndex > 0)
+                {
+                    possibleStarts.Add(startIndex);
+                }
+            }
+        }
+
+        QuestionNumberRange? bestRange = null;
+        int[] bestHits = Array.Empty<int>();
+        var bestScore = int.MinValue;
+        var bestEarliestOffset = int.MaxValue;
+        var bestSpan = int.MaxValue;
+
+        foreach (var startIndex in possibleStarts.OrderBy(x => x))
+        {
+            var currentRange = new QuestionNumberRange(startIndex, startIndex + expectedCount - 1);
+            var hits = candidateIndexes
+                .Where(currentRange.Contains)
+                .ToArray();
+
+            if (hits.Length == 0)
+            {
+                continue;
+            }
+
+            var earliestOffset = hits.Min() - currentRange.StartIndex;
+            var latestOffset = hits.Max() - currentRange.StartIndex;
+            var span = latestOffset - earliestOffset;
+            var score = (hits.Length * 1000) - (earliestOffset * 10) - span - currentRange.StartIndex;
+
+            if (score > bestScore ||
+                (score == bestScore && earliestOffset < bestEarliestOffset) ||
+                (score == bestScore && earliestOffset == bestEarliestOffset && span < bestSpan) ||
+                (score == bestScore && earliestOffset == bestEarliestOffset && span == bestSpan && startIndex < (bestRange?.StartIndex ?? int.MaxValue)))
+            {
+                bestRange = currentRange;
+                bestHits = hits;
+                bestScore = score;
+                bestEarliestOffset = earliestOffset;
+                bestSpan = span;
+            }
+        }
+
+        if (bestRange == null)
+        {
+            return false;
+        }
+
+        var minimumRequiredHits = Math.Min(2, expectedCount);
+        if (bestHits.Length < minimumRequiredHits)
+        {
+            reason = $"후보 번호가 {bestHits.Length}개만 겹쳐 시작 번호를 판단하기 어렵습니다.";
+            return false;
+        }
+
+        expectedQuestionRange = bestRange.Value;
+        var hitPreview = string.Join(", ", bestHits.Take(10));
+        if (bestHits.Length > 10)
+        {
+            hitPreview += ", ...";
+        }
+
+        reason = $"후보 번호 분포({hitPreview})를 기준으로 {expectedQuestionRange} 범위를 선택했습니다.";
+        return true;
+    }
+
+    private static PdfOcrResult WithQuestionCandidates(
+        PdfOcrResult analysis,
+        IReadOnlyList<OcrQuestionCandidate> questionCandidates)
+    {
+        return new PdfOcrResult
+        {
+            IsSuccess = analysis.IsSuccess,
+            SourceFileName = analysis.SourceFileName,
+            Message = analysis.Message,
+            AnalyzedAt = analysis.AnalyzedAt,
+            Pages = analysis.Pages.ToArray(),
+            QuestionCandidates = questionCandidates.ToArray()
+        };
     }
 
     private static async Task<bool> ConfirmOverwriteImportAsync(string sourceFileName, int existingCount)
@@ -1860,9 +2330,27 @@ public class MainViewModel : ViewModelBase
     private static string BuildAnalysisSummary(PdfOcrResult analysis, PdfAnalysisDiagnostics? diagnostics = null)
     {
         var baseSummary = $"{analysis.Summary}\n미리보기:\n{analysis.Preview}";
-        if (diagnostics?.ExpectedQuestionRange is QuestionNumberRange expectedRange)
+        if (diagnostics?.ExpectedQuestionCount is int expectedQuestionCount)
         {
-            baseSummary += $"\n예상 문항 범위: {expectedRange} ({expectedRange.Count}문항) / 분석 후보 수: {diagnostics.DistinctCandidateCount}";
+            baseSummary += $"\n입력 문항 수: {expectedQuestionCount}";
+
+            if (diagnostics.ExpectedQuestionRange is QuestionNumberRange expectedRange)
+            {
+                var rangeLabel = diagnostics.ExpectedQuestionRangeWasAutoInferred
+                    ? "자동 추정 문항 범위"
+                    : "예상 문항 범위";
+                baseSummary += $"\n{rangeLabel}: {expectedRange} ({expectedRange.Count}문항) / 분석 후보 수: {diagnostics.DistinctCandidateCount}";
+            }
+            else
+            {
+                baseSummary += "\n자동 추정 문항 범위: 확인 실패";
+            }
+
+            if (!string.IsNullOrWhiteSpace(diagnostics.ExpectedQuestionRangeReason))
+            {
+                baseSummary += $"\n범위 결정 근거: {diagnostics.ExpectedQuestionRangeReason}";
+            }
+
             baseSummary += diagnostics.HasExpectedQuestionMismatch
                 ? $"\n예상 비교 결과: 불일치 ({BuildExpectedQuestionMismatchSummary(diagnostics)})"
                 : "\n예상 비교 결과: 일치";
@@ -1883,16 +2371,28 @@ public class MainViewModel : ViewModelBase
 
     private static string BuildExpectedQuestionMismatchSummary(PdfAnalysisDiagnostics diagnostics)
     {
-        if (diagnostics.ExpectedQuestionRange == null)
+        if (diagnostics.ExpectedQuestionCount == null)
         {
             return string.Empty;
         }
 
-        var expectedRange = diagnostics.ExpectedQuestionRange.Value;
-        var messages = new List<string>
+        var messages = new List<string>();
+        if (diagnostics.ExpectedQuestionRange is QuestionNumberRange expectedRange)
         {
-            $"예상 {expectedRange.StartIndex}-{expectedRange.EndIndex} ({expectedRange.Count}개) / 분석 {diagnostics.DistinctCandidateCount}개"
-        };
+            var rangeLabel = diagnostics.ExpectedQuestionRangeWasAutoInferred
+                ? "자동 추정"
+                : "예상";
+            messages.Add($"{rangeLabel} {expectedRange.StartIndex}-{expectedRange.EndIndex} ({expectedRange.Count}개) / 분석 {diagnostics.DistinctCandidateCount}개");
+        }
+        else
+        {
+            messages.Add($"입력 문항 수 {diagnostics.ExpectedQuestionCount.Value}개에 맞는 시작 번호를 자동 추정하지 못했습니다.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(diagnostics.ExpectedQuestionRangeReason))
+        {
+            messages.Add(diagnostics.ExpectedQuestionRangeReason);
+        }
 
         if (diagnostics.MissingIndexes.Length > 0)
         {
@@ -1961,7 +2461,8 @@ public class MainViewModel : ViewModelBase
     private static PdfAnalysisDiagnostics BuildPdfAnalysisDiagnostics(
         string sourceFileName,
         PdfOcrResult analysis,
-        QuestionNumberRange? expectedQuestionRange)
+        ExpectedQuestionInput expectedQuestionInput,
+        ExpectedQuestionRangeResolution expectedQuestionRangeResolution)
     {
         var rawCandidates = analysis.QuestionCandidates
             .Where(x => x.Index > 0)
@@ -1982,6 +2483,7 @@ public class MainViewModel : ViewModelBase
                 Headers = x.Select(y => y.Header).Take(5).ToArray()
             })
             .ToArray();
+        var expectedQuestionRange = expectedQuestionRangeResolution.Range;
         var missingIndexes = expectedQuestionRange.HasValue
             ? Enumerable.Range(expectedQuestionRange.Value.StartIndex, expectedQuestionRange.Value.Count)
                 .Except(candidateIndexes)
@@ -1992,8 +2494,9 @@ public class MainViewModel : ViewModelBase
                 .Where(x => !expectedQuestionRange.Value.Contains(x))
                 .ToArray()
             : Array.Empty<int>();
-        var hasExpectedQuestionMismatch = expectedQuestionRange.HasValue &&
-            (candidateIndexes.Length != expectedQuestionRange.Value.Count ||
+        var hasExpectedQuestionMismatch = expectedQuestionInput.HasValue &&
+            (!expectedQuestionRange.HasValue ||
+             candidateIndexes.Length != expectedQuestionRange.Value.Count ||
              missingIndexes.Length > 0 ||
              unexpectedIndexes.Length > 0 ||
              duplicateIndexes.Length > 0);
@@ -2002,7 +2505,11 @@ public class MainViewModel : ViewModelBase
         {
             GeneratedAt = DateTimeOffset.Now,
             SourceFileName = sourceFileName,
+            ExpectedQuestionInput = expectedQuestionInput.RawText,
+            ExpectedQuestionCount = expectedQuestionInput.ExpectedCountOrNull,
             ExpectedQuestionRange = expectedQuestionRange,
+            ExpectedQuestionRangeWasAutoInferred = expectedQuestionRangeResolution.IsAutoInferred && expectedQuestionRange.HasValue,
+            ExpectedQuestionRangeReason = expectedQuestionRangeResolution.Reason,
             PageCount = analysis.PageCount,
             TotalWordCount = analysis.TotalWordCount,
             RawCandidateCount = rawCandidates.Length,
@@ -2075,13 +2582,34 @@ public class MainViewModel : ViewModelBase
         builder.AppendLine($"고유 후보 수: {diagnostics.DistinctCandidateCount}");
         builder.AppendLine($"후보 번호: {FormatIntArray(diagnostics.CandidateIndexes)}");
 
+        if (!string.IsNullOrWhiteSpace(diagnostics.ExpectedQuestionInput))
+        {
+            builder.AppendLine($"입력값: {diagnostics.ExpectedQuestionInput}");
+        }
+
+        if (diagnostics.ExpectedQuestionCount is int expectedQuestionCount)
+        {
+            builder.AppendLine($"입력 문항 수: {expectedQuestionCount}");
+        }
+
         if (diagnostics.ExpectedQuestionRange is QuestionNumberRange expectedRange)
         {
-            builder.AppendLine($"예상 문항 범위: {expectedRange}");
-            builder.AppendLine($"예상 문항 수: {expectedRange.Count}");
+            builder.AppendLine($"결정된 문항 범위: {expectedRange}");
+            builder.AppendLine($"범위 결정 방식: {(diagnostics.ExpectedQuestionRangeWasAutoInferred ? "자동 추정" : "직접 입력")}");
             builder.AppendLine($"예상 비교 불일치: {(diagnostics.HasExpectedQuestionMismatch ? "예" : "아니오")}");
             builder.AppendLine($"누락 번호: {FormatIntArray(diagnostics.MissingIndexes)}");
             builder.AppendLine($"예상 범위 밖 번호: {FormatIntArray(diagnostics.UnexpectedIndexes)}");
+        }
+        else if (diagnostics.ExpectedQuestionCount is int)
+        {
+            builder.AppendLine("결정된 문항 범위: 없음");
+            builder.AppendLine("범위 결정 방식: 자동 추정 실패");
+            builder.AppendLine($"예상 비교 불일치: {(diagnostics.HasExpectedQuestionMismatch ? "예" : "아니오")}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(diagnostics.ExpectedQuestionRangeReason))
+        {
+            builder.AppendLine($"범위 결정 근거: {diagnostics.ExpectedQuestionRangeReason}");
         }
 
         builder.AppendLine($"중복 번호: {(diagnostics.DuplicateIndexes.Length == 0 ? "없음" : string.Join(", ", diagnostics.DuplicateIndexes.Select(x => $"{x.Index}({x.Count})")))}");
@@ -2119,7 +2647,11 @@ public class MainViewModel : ViewModelBase
     {
         public DateTimeOffset GeneratedAt { get; init; }
         public string SourceFileName { get; init; } = string.Empty;
+        public string ExpectedQuestionInput { get; init; } = string.Empty;
+        public int? ExpectedQuestionCount { get; init; }
         public QuestionNumberRange? ExpectedQuestionRange { get; init; }
+        public bool ExpectedQuestionRangeWasAutoInferred { get; init; }
+        public string ExpectedQuestionRangeReason { get; init; } = string.Empty;
         public int PageCount { get; init; }
         public int TotalWordCount { get; init; }
         public int RawCandidateCount { get; init; }
@@ -2159,4 +2691,46 @@ public class MainViewModel : ViewModelBase
         public string[] LeadingLines { get; init; } = Array.Empty<string>();
         public int[] CandidateIndexes { get; init; } = Array.Empty<int>();
     }
+
+    private readonly record struct ExpectedQuestionInput(
+        string RawText,
+        int? Count,
+        QuestionNumberRange? ExplicitRange)
+    {
+        public static ExpectedQuestionInput Empty => new(string.Empty, null, null);
+
+        public bool HasValue => Count.HasValue || ExplicitRange.HasValue;
+
+        public bool IsCountOnly => Count.HasValue && !ExplicitRange.HasValue;
+
+        public int ExpectedCount => ExplicitRange?.Count ?? Count ?? 0;
+
+        public int? ExpectedCountOrNull => HasValue ? ExpectedCount : null;
+
+        public static ExpectedQuestionInput FromCount(string rawText, int count)
+        {
+            return new ExpectedQuestionInput(rawText, count, null);
+        }
+
+        public static ExpectedQuestionInput FromRange(string rawText, QuestionNumberRange range)
+        {
+            return new ExpectedQuestionInput(rawText, range.Count, range);
+        }
+    }
+
+    private readonly record struct ExpectedQuestionRangeResolution(
+        QuestionNumberRange? Range,
+        int ExpectedCount,
+        bool IsAutoInferred,
+        string Reason)
+    {
+        public static ExpectedQuestionRangeResolution None => new(null, 0, false, string.Empty);
+    }
+
+    private readonly record struct SharedContextDefinition(
+        QuestionNumberRange QuestionRange,
+        int ContextStartLine,
+        int QuestionStartLine);
+
+    private readonly record struct PageLineText(int PageIndex, int LineInPage, string Text);
 }

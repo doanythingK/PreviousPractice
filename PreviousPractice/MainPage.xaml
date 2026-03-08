@@ -41,13 +41,13 @@
                     </HorizontalStackLayout>
                     <Button Text="문항 PDF 추가" Command="{Binding ImportSourceFileCommand}" />
                     <HorizontalStackLayout Spacing="8">
-                        <Label Text="예상 문항 범위" VerticalTextAlignment="Center" />
+                        <Label Text="예상 문항 수/범위" VerticalTextAlignment="Center" />
                         <Entry
                             WidthRequest="130"
-                            Placeholder="예: 1-25"
+                            Placeholder="예: 25 또는 31-55"
                             Text="{Binding ExpectedQuestionRangeText}" />
                         <Label
-                            Text="예: 1-25, 31-55, 36~60. 범위가 다르면 저장하지 않습니다."
+                            Text="예: 25 또는 31-55. 숫자만 넣으면 시작 번호를 자동 추정합니다."
                             FontSize="12"
                             TextColor="#94A3B8"
                             VerticalTextAlignment="Center" />

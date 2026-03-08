@@ -185,11 +185,420 @@ public static class OcrQuestionSegmenter
             return fallback;
         }
 
+        if (expectedQuestionRange.HasValue)
+        {
+            candidates = RecoverExpectedRangeCandidates(
+                lines,
+                pageLineCounts,
+                expectedQuestionRange.Value,
+                candidates);
+        }
+
         AppLog.Info(
             nameof(OcrQuestionSegmenter),
             $"분할 결과(헤더) | pages={pages.Count} | lines={lines.Count} | syntheticBreaks={syntheticBreakCount} | regexMatch={headerRegexMatchCount} | normalized={normalizedIndexMatchCount} | duplicates={duplicateIndexCount} | candidates={candidates.Count}");
         LogCandidateSummary("header", candidates);
         return candidates;
+    }
+
+    private static List<OcrQuestionCandidate> RecoverExpectedRangeCandidates(
+        IReadOnlyList<ParsedLine> lines,
+        IReadOnlyDictionary<int, int> pageLineCounts,
+        QuestionNumberRange expectedQuestionRange,
+        IReadOnlyList<OcrQuestionCandidate> candidates)
+    {
+        if (lines.Count == 0 || candidates.Count == 0)
+        {
+            return candidates.ToList();
+        }
+
+        var linePositions = lines
+            .Select((line, position) => new { line.PageIndex, line.LineInPage, Position = position })
+            .ToDictionary(
+                x => (x.PageIndex, x.LineInPage),
+                x => x.Position);
+
+        var markers = candidates
+            .Where(x => x.Index > 0 && expectedQuestionRange.Contains(x.Index))
+            .Select(candidate => TryCreateStartMarker(candidate, linePositions, out var marker) ? marker : (StartMarker?)null)
+            .Where(x => x.HasValue)
+            .Select(x => x!.Value)
+            .OrderBy(x => x.Position)
+            .ToList();
+
+        if (markers.Count == 0)
+        {
+            return candidates.ToList();
+        }
+
+        var recoveredExactCount = 0;
+        foreach (var missingIndex in Enumerable.Range(expectedQuestionRange.StartIndex, expectedQuestionRange.Count))
+        {
+            if (markers.Any(x => x.Index == missingIndex))
+            {
+                continue;
+            }
+
+            if (TryFindExactMissingIndexMarker(lines, markers, missingIndex, out var marker))
+            {
+                markers.Add(marker);
+                recoveredExactCount++;
+            }
+        }
+
+        markers = markers
+            .OrderBy(x => x.Position)
+            .ToList();
+
+        var recoveredInferredCount = 0;
+        markers = RecoverInferredGapMarkers(lines, markers, expectedQuestionRange, ref recoveredInferredCount);
+
+        if (recoveredExactCount == 0 && recoveredInferredCount == 0)
+        {
+            return candidates.ToList();
+        }
+
+        var rebuilt = RebuildCandidatesFromMarkers(lines, pageLineCounts, markers);
+        AppLog.Info(
+            nameof(OcrQuestionSegmenter),
+            $"누락 문항 복구 | expected={expectedQuestionRange} | exact={recoveredExactCount} | inferred={recoveredInferredCount} | candidates={rebuilt.Count}");
+        return rebuilt;
+    }
+
+    private static bool TryCreateStartMarker(
+        OcrQuestionCandidate candidate,
+        IReadOnlyDictionary<(int PageIndex, int LineInPage), int> linePositions,
+        out StartMarker marker)
+    {
+        marker = default;
+        if (!linePositions.TryGetValue((candidate.StartPage, candidate.StartLineInPage), out var position))
+        {
+            return false;
+        }
+
+        marker = new StartMarker(
+            candidate.Index,
+            position,
+            candidate.StartPage,
+            candidate.StartLineInPage,
+            candidate.Header,
+            candidate.ImagePath,
+            Inferred: false);
+        return true;
+    }
+
+    private static bool TryFindExactMissingIndexMarker(
+        IReadOnlyList<ParsedLine> lines,
+        IReadOnlyList<StartMarker> markers,
+        int missingIndex,
+        out StartMarker marker)
+    {
+        marker = default;
+        var previousMarker = markers
+            .Where(x => x.Index < missingIndex)
+            .OrderByDescending(x => x.Index)
+            .FirstOrDefault();
+        var nextMarker = markers
+            .Where(x => x.Index > missingIndex)
+            .OrderBy(x => x.Index)
+            .FirstOrDefault();
+
+        var searchStart = previousMarker == default ? 0 : previousMarker.Position + 1;
+        var searchEnd = nextMarker == default ? lines.Count - 1 : nextMarker.Position - 1;
+        if (searchStart > searchEnd)
+        {
+            return false;
+        }
+
+        for (var position = searchStart; position <= searchEnd; position++)
+        {
+            if (!TryMatchExpectedIndexHeader(lines, position, missingIndex))
+            {
+                continue;
+            }
+
+            var line = lines[position];
+            marker = new StartMarker(
+                missingIndex,
+                position,
+                line.PageIndex,
+                line.LineInPage,
+                line.Text,
+                ImagePath: null,
+                Inferred: true);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryMatchExpectedIndexHeader(
+        IReadOnlyList<ParsedLine> lines,
+        int lineIndex,
+        int expectedIndex)
+    {
+        if (lineIndex < 0 || lineIndex >= lines.Count)
+        {
+            return false;
+        }
+
+        var line = lines[lineIndex];
+        if (string.IsNullOrWhiteSpace(line.Text) || IsDisallowedHeaderText(line.Text))
+        {
+            return false;
+        }
+
+        var nextLineText = lineIndex + 1 < lines.Count && lines[lineIndex + 1].PageIndex == line.PageIndex
+            ? lines[lineIndex + 1].Text
+            : null;
+        var regex = new Regex(
+            $@"^\s*(?:[Qq]\s*)?(?:(?:제|문항|문제)\s*)?{expectedIndex}(?!\d)",
+            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        var match = regex.Match(line.Text);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var suffix = line.Text.Substring(Math.Min(match.Length, line.Text.Length)).Trim();
+        return IsPlausibleQuestionHeaderText(line.Text, suffix, nextLineText);
+    }
+
+    private static List<StartMarker> RecoverInferredGapMarkers(
+        IReadOnlyList<ParsedLine> lines,
+        IReadOnlyList<StartMarker> markers,
+        QuestionNumberRange expectedQuestionRange,
+        ref int recoveredInferredCount)
+    {
+        var orderedMarkers = markers
+            .OrderBy(x => x.Position)
+            .ToList();
+
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (var index = 0; index < orderedMarkers.Count - 1; index++)
+            {
+                var current = orderedMarkers[index];
+                var next = orderedMarkers[index + 1];
+                var missingCount = next.Index - current.Index - 1;
+                if (missingCount <= 0)
+                {
+                    continue;
+                }
+
+                var gapMarkers = InferGapMarkers(lines, current, next, missingCount);
+                if (gapMarkers.Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (var marker in gapMarkers)
+                {
+                    if (marker.Index < expectedQuestionRange.StartIndex ||
+                        marker.Index > expectedQuestionRange.EndIndex ||
+                        orderedMarkers.Any(x => x.Index == marker.Index))
+                    {
+                        continue;
+                    }
+
+                    orderedMarkers.Add(marker);
+                    recoveredInferredCount++;
+                    changed = true;
+                }
+
+                if (changed)
+                {
+                    orderedMarkers = orderedMarkers
+                        .OrderBy(x => x.Position)
+                        .ToList();
+                    break;
+                }
+            }
+        }
+
+        return orderedMarkers;
+    }
+
+    private static List<StartMarker> InferGapMarkers(
+        IReadOnlyList<ParsedLine> lines,
+        StartMarker current,
+        StartMarker next,
+        int missingCount)
+    {
+        var gapStart = current.Position + 1;
+        var gapEnd = next.Position - 1;
+        if (gapStart > gapEnd)
+        {
+            return new List<StartMarker>();
+        }
+
+        var anchorLeft = lines[current.Position].LeftRatio;
+        var candidatePositions = new List<(int Position, int Score)>();
+        for (var position = gapStart; position <= gapEnd; position++)
+        {
+            if (!LooksLikeInferredHeaderLine(lines, position, anchorLeft, out var score))
+            {
+                continue;
+            }
+
+            candidatePositions.Add((position, score));
+        }
+
+        if (candidatePositions.Count == 0)
+        {
+            return new List<StartMarker>();
+        }
+
+        var topScore = candidatePositions.Max(x => x.Score);
+        var selectedPositions = candidatePositions
+            .Where(x => x.Score >= topScore - 25)
+            .OrderBy(x => x.Position)
+            .ThenByDescending(x => x.Score)
+            .Take(missingCount)
+            .ToArray();
+
+        var inferredMarkers = new List<StartMarker>();
+        for (var i = 0; i < selectedPositions.Length; i++)
+        {
+            var missingIndex = current.Index + i + 1;
+            var line = lines[selectedPositions[i].Position];
+            inferredMarkers.Add(new StartMarker(
+                missingIndex,
+                selectedPositions[i].Position,
+                line.PageIndex,
+                line.LineInPage,
+                $"[추정] {missingIndex}. {line.Text}",
+                ImagePath: null,
+                Inferred: true));
+        }
+
+        return inferredMarkers;
+    }
+
+    private static bool LooksLikeInferredHeaderLine(
+        IReadOnlyList<ParsedLine> lines,
+        int lineIndex,
+        double anchorLeft,
+        out int score)
+    {
+        score = 0;
+        if (lineIndex < 0 || lineIndex >= lines.Count)
+        {
+            return false;
+        }
+
+        var line = lines[lineIndex];
+        var normalized = line.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            IsDisallowedHeaderText(normalized) ||
+            Regex.IsMatch(normalized, @"^\d", RegexOptions.CultureInvariant) ||
+            LooksLikeCodeLikeSuffix(normalized))
+        {
+            return false;
+        }
+
+        if (Regex.IsMatch(
+                normalized,
+                @"^(?:0\s|O\s|[㉠-㉻]|[①-⑳])",
+                RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        var nextLineText = lineIndex + 1 < lines.Count && lines[lineIndex + 1].PageIndex == line.PageIndex
+            ? lines[lineIndex + 1].Text
+            : null;
+
+        var hangulCount = CountHangulCharacters(normalized);
+        if (hangulCount < 4 && !normalized.Contains('?'))
+        {
+            return false;
+        }
+
+        if (!LooksLikeQuestionContinuation(nextLineText) && !normalized.Contains('?'))
+        {
+            return false;
+        }
+
+        var leftDiff = Math.Abs(line.LeftRatio - anchorLeft);
+        score += Math.Max(0, 50 - (int)(leftDiff * 400));
+        score += Math.Min(30, hangulCount * 3);
+        if (normalized.Contains('?'))
+        {
+            score += 20;
+        }
+
+        if (Regex.IsMatch(normalized, @"^[^\d\s]{1,4}[.)\]•·\-~〜]*\s+", RegexOptions.CultureInvariant))
+        {
+            score += 25;
+        }
+
+        var nextTokenIndex = normalized.IndexOf("다음", StringComparison.Ordinal);
+        if (nextTokenIndex >= 0 && nextTokenIndex <= 10)
+        {
+            score += 20;
+        }
+
+        var previousLine = lineIndex > 0 ? lines[lineIndex - 1] : default;
+        if (lineIndex > 0 && previousLine.PageIndex == line.PageIndex)
+        {
+            var previousLeftDiff = previousLine.LeftRatio - line.LeftRatio;
+            if (previousLeftDiff > 0.02d)
+            {
+                score += 10;
+            }
+        }
+
+        return score >= 40;
+    }
+
+    private static List<OcrQuestionCandidate> RebuildCandidatesFromMarkers(
+        IReadOnlyList<ParsedLine> lines,
+        IReadOnlyDictionary<int, int> pageLineCounts,
+        IReadOnlyList<StartMarker> markers)
+    {
+        var orderedMarkers = markers
+            .OrderBy(x => x.Position)
+            .ToArray();
+        var rebuilt = new List<OcrQuestionCandidate>();
+
+        for (var index = 0; index < orderedMarkers.Length; index++)
+        {
+            var marker = orderedMarkers[index];
+            var startLine = lines[marker.Position];
+            var nextMarkerPosition = index + 1 < orderedMarkers.Length
+                ? orderedMarkers[index + 1].Position
+                : lines.Count;
+            var endPositionExclusive = Math.Max(marker.Position + 1, nextMarkerPosition);
+            var bodyLines = lines
+                .Skip(marker.Position + 1)
+                .Take(Math.Max(0, endPositionExclusive - marker.Position - 1))
+                .ToArray();
+            var lastLine = bodyLines.Length > 0
+                ? bodyLines[^1]
+                : startLine;
+            var preview = TrimToLength(
+                string.Join(Environment.NewLine, bodyLines.Select(x => x.Text)),
+                150);
+
+            rebuilt.Add(new OcrQuestionCandidate
+            {
+                Index = marker.Index,
+                Header = marker.Header,
+                StartPage = marker.PageIndex,
+                EndPage = lastLine.PageIndex,
+                StartLineInPage = marker.LineInPage,
+                EndLineInPage = lastLine.LineInPage,
+                StartPageLineCount = GetPageLineCount(pageLineCounts, marker.PageIndex),
+                EndPageLineCount = GetPageLineCount(pageLineCounts, lastLine.PageIndex),
+                ImagePath = marker.ImagePath,
+                PreviewText = preview
+            });
+        }
+
+        return rebuilt;
     }
 
     private static IReadOnlyList<OcrQuestionCandidate> SplitByPermissiveHeader(
@@ -690,4 +1099,13 @@ public static class OcrQuestionSegmenter
         double TopRatio = 0d,
         double RightRatio = 1d,
         double BottomRatio = 1d);
+
+    private readonly record struct StartMarker(
+        int Index,
+        int Position,
+        int PageIndex,
+        int LineInPage,
+        string Header,
+        string? ImagePath,
+        bool Inferred);
 }
