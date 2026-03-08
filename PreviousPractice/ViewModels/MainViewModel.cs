@@ -73,6 +73,17 @@ public class MainViewModel : ViewModelBase
     private static readonly Regex SharedContextRangeEndRegex = new(
         @"[-~〜]\s*(?<end>\d{1,3})(?:번|문항|문제)?(?!\d)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex StructuralSharedContextMarkerRegex = new(
+        @"[<(（【〔［]\s*(?:\d{1,3}|[%A-Za-z가-힣①-⑳㉠-㉻]+)?\s*[-~〜]\s*(?:\d{1,3}|[%A-Za-z가-힣①-⑳㉠-㉻]+)\s*[>)）】〕］]",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly string[] StructuralBlockingBoilerplatePhrases =
+    [
+        "출제위원",
+        "출제범위",
+        "출석수업대체시험",
+        "다음 면에 계속",
+        "앞면에서 계속"
+    ];
 
     public ObservableCollection<Category> Categories { get; } = new();
     public ObservableCollection<SourceFileSummary> SourceFiles { get; } = new();
@@ -629,21 +640,40 @@ public class MainViewModel : ViewModelBase
                 analysis,
                 expectedQuestionInput,
                 resolvedExpectedQuestionRange);
+            (analysis, diagnostics) = TryAutoRepairAnalysis(
+                normalizedSourceFileName,
+                analysis,
+                diagnostics,
+                expectedQuestionInput,
+                resolvedExpectedQuestionRange);
+            await SavePdfAnalysisAsync(normalizedSourceFileName, analysis);
             var diagnosticsPath = await SavePdfAnalysisDiagnosticsAsync(normalizedSourceFileName, diagnostics);
             PdfAnalysisSummary = BuildAnalysisSummary(analysis, diagnostics);
             PdfAnalysisStatus = "문항 분석이 완료되었습니다.";
             PdfAnalysisStatusColor = Color.FromArgb("#16A34A");
 
-            if (diagnostics.HasExpectedQuestionMismatch)
+            if (diagnostics.HasExpectedQuestionMismatch || diagnostics.HasBlockingStructuralIssues)
             {
-                var mismatchSummary = BuildExpectedQuestionMismatchSummary(diagnostics);
-                PdfAnalysisStatus = "예상 문항 범위와 분석 결과가 일치하지 않습니다.";
+                var blockingSummaries = new List<string>();
+                if (diagnostics.HasExpectedQuestionMismatch)
+                {
+                    blockingSummaries.Add(BuildExpectedQuestionMismatchSummary(diagnostics));
+                }
+
+                if (diagnostics.HasBlockingStructuralIssues)
+                {
+                    blockingSummaries.Add($"구조 검증 실패: {BuildStructuralIssueSummary(diagnostics)}");
+                }
+
+                PdfAnalysisStatus = diagnostics.HasBlockingStructuralIssues
+                    ? "문항 구조 검증에 실패했습니다."
+                    : "예상 문항 범위와 분석 결과가 일치하지 않습니다.";
                 PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
-                Feedback = $"{mismatchSummary}\n문항 반영을 중단했습니다." +
+                Feedback = $"{string.Join("\n", blockingSummaries)}\n문항 반영을 중단했습니다." +
                            (string.IsNullOrWhiteSpace(diagnosticsPath) ? string.Empty : $"\n진단 파일: {diagnosticsPath}");
                 AppLog.Error(
                     nameof(MainViewModel),
-                    $"문항 반영 중단 | expectedCount={diagnostics.ExpectedQuestionCount?.ToString() ?? "n/a"} | expectedRange={diagnostics.ExpectedQuestionRange?.ToString() ?? "n/a"} | detected={diagnostics.DistinctCandidateCount} | missing={string.Join(",", diagnostics.MissingIndexes)} | unexpected={string.Join(",", diagnostics.UnexpectedIndexes)} | duplicates={string.Join(",", diagnostics.DuplicateIndexes.Select(x => x.Index))} | diag={diagnosticsPath ?? "n/a"}");
+                    $"문항 반영 중단 | expectedCount={diagnostics.ExpectedQuestionCount?.ToString() ?? "n/a"} | expectedRange={diagnostics.ExpectedQuestionRange?.ToString() ?? "n/a"} | detected={diagnostics.DistinctCandidateCount} | missing={string.Join(",", diagnostics.MissingIndexes)} | unexpected={string.Join(",", diagnostics.UnexpectedIndexes)} | duplicates={string.Join(",", diagnostics.DuplicateIndexes.Select(x => x.Index))} | structural={string.Join(",", diagnostics.StructuralIssues.Select(x => $"{x.Code}:{x.Index?.ToString() ?? "n/a"}"))} | diag={diagnosticsPath ?? "n/a"}");
                 return;
             }
 
@@ -2256,6 +2286,176 @@ public class MainViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanDeleteSourceFile));
     }
 
+    private static (PdfOcrResult Analysis, PdfAnalysisDiagnostics Diagnostics) TryAutoRepairAnalysis(
+        string sourceFileName,
+        PdfOcrResult analysis,
+        PdfAnalysisDiagnostics diagnostics,
+        ExpectedQuestionInput expectedQuestionInput,
+        ExpectedQuestionRangeResolution expectedQuestionRangeResolution)
+    {
+        if (expectedQuestionRangeResolution.Range is not QuestionNumberRange expectedRange)
+        {
+            return (analysis, diagnostics);
+        }
+
+        if (!diagnostics.HasExpectedQuestionMismatch && !diagnostics.HasBlockingStructuralIssues)
+        {
+            return (analysis, diagnostics);
+        }
+
+        var currentAnalysis = analysis;
+        var currentDiagnostics = diagnostics;
+
+        for (var attempt = 1; attempt <= 2; attempt++)
+        {
+            var seedCandidates = BuildAutomaticRepairSeedCandidates(
+                currentAnalysis.QuestionCandidates,
+                currentDiagnostics.StructuralIssues);
+            if (seedCandidates.Length == 0 ||
+                seedCandidates.Length >= currentAnalysis.QuestionCandidates.Count)
+            {
+                AppLog.Info(
+                    nameof(MainViewModel),
+                    $"자동 보정 생략 | file={sourceFileName} | attempt={attempt} | current={currentAnalysis.QuestionCandidates.Count} | seed={seedCandidates.Length} | issues={currentDiagnostics.StructuralIssues.Length}");
+                break;
+            }
+
+            var repairedCandidates = OcrQuestionSegmenter.RefineCandidates(
+                currentAnalysis.Pages,
+                expectedRange,
+                seedCandidates);
+            if (repairedCandidates.Count == 0)
+            {
+                AppLog.Info(
+                    nameof(MainViewModel),
+                    $"자동 보정 실패 | file={sourceFileName} | attempt={attempt} | seed={seedCandidates.Length} | rebuilt=0");
+                break;
+            }
+
+            var candidateAnalysis = WithQuestionCandidates(currentAnalysis, repairedCandidates);
+            var candidateDiagnostics = BuildPdfAnalysisDiagnostics(
+                sourceFileName,
+                candidateAnalysis,
+                expectedQuestionInput,
+                expectedQuestionRangeResolution);
+
+            AppLog.Info(
+                nameof(MainViewModel),
+                $"자동 보정 시도 | file={sourceFileName} | attempt={attempt} | beforeIssues={currentDiagnostics.StructuralIssues.Length} | beforeMismatch={(currentDiagnostics.HasExpectedQuestionMismatch ? 1 : 0)} | seed={seedCandidates.Length} | rebuilt={repairedCandidates.Count} | afterIssues={candidateDiagnostics.StructuralIssues.Length} | afterMismatch={(candidateDiagnostics.HasExpectedQuestionMismatch ? 1 : 0)}");
+
+            if (!IsBetterDiagnostics(candidateDiagnostics, currentDiagnostics))
+            {
+                AppLog.Info(
+                    nameof(MainViewModel),
+                    $"자동 보정 롤백 | file={sourceFileName} | attempt={attempt} | beforeIssues={currentDiagnostics.StructuralIssues.Length} | afterIssues={candidateDiagnostics.StructuralIssues.Length} | beforeMismatch={(currentDiagnostics.HasExpectedQuestionMismatch ? 1 : 0)} | afterMismatch={(candidateDiagnostics.HasExpectedQuestionMismatch ? 1 : 0)}");
+                break;
+            }
+
+            currentAnalysis = candidateAnalysis;
+            currentDiagnostics = candidateDiagnostics;
+
+            if (!currentDiagnostics.HasExpectedQuestionMismatch &&
+                !currentDiagnostics.HasBlockingStructuralIssues)
+            {
+                break;
+            }
+        }
+
+        return (currentAnalysis, currentDiagnostics);
+    }
+
+    private static OcrQuestionCandidate[] BuildAutomaticRepairSeedCandidates(
+        IReadOnlyList<OcrQuestionCandidate> candidates,
+        IReadOnlyList<PdfAnalysisStructuralIssueDiagnostics> issues)
+    {
+        if (candidates.Count == 0 || issues.Count == 0)
+        {
+            return candidates.ToArray();
+        }
+
+        var candidateByIndex = candidates
+            .GroupBy(x => x.Index)
+            .ToDictionary(x => x.Key, x => x.First());
+        var removableIndexes = new HashSet<int>();
+
+        foreach (var issue in issues)
+        {
+            if (!issue.Index.HasValue ||
+                !candidateByIndex.TryGetValue(issue.Index.Value, out var candidate))
+            {
+                continue;
+            }
+
+            if (issue.Code is "invalid-span" or "boilerplate-candidate" or "shared-context-leak")
+            {
+                if (candidate.IsInferred)
+                {
+                    removableIndexes.Add(candidate.Index);
+                }
+
+                continue;
+            }
+
+            if (issue.Code is "overlapping-range" or "nonincreasing-start")
+            {
+                var overlappingCandidates = ResolveOverlappingCandidates(candidates, candidate.Index);
+                foreach (var overlappingCandidate in overlappingCandidates.Where(x => x.IsInferred))
+                {
+                    removableIndexes.Add(overlappingCandidate.Index);
+                }
+            }
+        }
+
+        return candidates
+            .Where(x => !removableIndexes.Contains(x.Index))
+            .ToArray();
+    }
+
+    private static OcrQuestionCandidate[] ResolveOverlappingCandidates(
+        IReadOnlyList<OcrQuestionCandidate> candidates,
+        int candidateIndex)
+    {
+        var ordered = candidates
+            .OrderBy(x => x.Index)
+            .ThenBy(x => x.LogicalStartOrder)
+            .ThenBy(x => x.StartPage)
+            .ThenBy(x => x.StartLineInPage)
+            .ToArray();
+        var position = Array.FindIndex(ordered, x => x.Index == candidateIndex);
+        if (position < 0)
+        {
+            return Array.Empty<OcrQuestionCandidate>();
+        }
+
+        var result = new List<OcrQuestionCandidate> { ordered[position] };
+        if (position > 0)
+        {
+            result.Add(ordered[position - 1]);
+        }
+
+        if (position + 1 < ordered.Length)
+        {
+            result.Add(ordered[position + 1]);
+        }
+
+        return result.ToArray();
+    }
+
+    private static bool IsBetterDiagnostics(
+        PdfAnalysisDiagnostics candidate,
+        PdfAnalysisDiagnostics baseline)
+    {
+        var candidateScore = GetDiagnosticsPenaltyScore(candidate);
+        var baselineScore = GetDiagnosticsPenaltyScore(baseline);
+        return candidateScore < baselineScore;
+    }
+
+    private static int GetDiagnosticsPenaltyScore(PdfAnalysisDiagnostics diagnostics)
+    {
+        var mismatchPenalty = diagnostics.HasExpectedQuestionMismatch ? 1000 : 0;
+        return mismatchPenalty + diagnostics.StructuralIssues.Length;
+    }
+
     private static string BuildAnalysisSummary(PdfOcrResult analysis, PdfAnalysisDiagnostics? diagnostics = null)
     {
         var baseSummary = $"{analysis.Summary}\n미리보기:\n{analysis.Preview}";
@@ -2283,6 +2483,13 @@ public class MainViewModel : ViewModelBase
             baseSummary += diagnostics.HasExpectedQuestionMismatch
                 ? $"\n예상 비교 결과: 불일치 ({BuildExpectedQuestionMismatchSummary(diagnostics)})"
                 : "\n예상 비교 결과: 일치";
+        }
+
+        if (diagnostics is not null)
+        {
+            baseSummary += diagnostics.HasBlockingStructuralIssues
+                ? $"\n구조 검증 결과: 실패 ({BuildStructuralIssueSummary(diagnostics)})"
+                : "\n구조 검증 결과: 통과";
         }
 
         if (!analysis.HasQuestionCandidates)
@@ -2339,6 +2546,246 @@ public class MainViewModel : ViewModelBase
         }
 
         return string.Join(" / ", messages);
+    }
+
+    private static string BuildStructuralIssueSummary(PdfAnalysisDiagnostics diagnostics)
+    {
+        if (diagnostics.StructuralIssues.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        var messages = diagnostics.StructuralIssues
+            .Take(3)
+            .Select(x => x.Message)
+            .ToList();
+        if (diagnostics.StructuralIssues.Length > messages.Count)
+        {
+            messages.Add($"외 {diagnostics.StructuralIssues.Length - messages.Count}건");
+        }
+
+        return string.Join(" / ", messages);
+    }
+
+    private static PdfAnalysisStructuralIssueDiagnostics[] BuildStructuralIssues(
+        IReadOnlyList<OcrQuestionCandidate> candidates)
+    {
+        if (candidates.Count == 0)
+        {
+            return Array.Empty<PdfAnalysisStructuralIssueDiagnostics>();
+        }
+
+        var issues = new List<PdfAnalysisStructuralIssueDiagnostics>();
+        var orderedByIndex = candidates
+            .OrderBy(x => x.Index)
+            .ThenBy(x => x.StartPage)
+            .ThenBy(x => x.StartLineInPage)
+            .ToArray();
+
+        for (var i = 0; i < orderedByIndex.Length; i++)
+        {
+            var candidate = orderedByIndex[i];
+            var boilerplateProbe = BuildStructuralProbeText(candidate, previewLineLimit: 3);
+            var blockingPhrase = FindStructuralBlockingBoilerplatePhrase(boilerplateProbe);
+            if (!string.IsNullOrWhiteSpace(blockingPhrase))
+            {
+                issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                {
+                    Code = "boilerplate-candidate",
+                    Index = candidate.Index,
+                    Message = $"{candidate.Index}번 후보에 '{blockingPhrase}' 문구가 포함되어 있습니다."
+                });
+            }
+
+            if (HasInvalidCandidateSpan(candidate))
+            {
+                issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                {
+                    Code = "invalid-span",
+                    Index = candidate.Index,
+                    Message = $"{candidate.Index}번 범위가 비정상입니다: p{candidate.StartPage}:{candidate.StartLineInPage} -> p{candidate.EndPage}:{candidate.EndLineInPage}"
+                });
+            }
+
+            if (HasSuspiciousSharedContextLeak(candidate))
+            {
+                issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                {
+                    Code = "shared-context-leak",
+                    Index = candidate.Index,
+                    Message = $"{candidate.Index}번 후보에 현재 번호와 맞지 않는 공통 지문 마커가 섞여 있습니다."
+                });
+            }
+
+            if (i == 0)
+            {
+                continue;
+            }
+
+            var previous = orderedByIndex[i - 1];
+            if (!HasInvalidCandidateSpan(previous) &&
+                !HasInvalidCandidateSpan(candidate) &&
+                CompareCandidateStart(candidate, previous) <= 0)
+            {
+                issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                {
+                    Code = "nonincreasing-start",
+                    Index = candidate.Index,
+                    Message = $"{candidate.Index}번 시작 위치가 {previous.Index}번보다 앞서거나 같습니다."
+                });
+            }
+
+            if (!HasInvalidCandidateSpan(previous) &&
+                !HasInvalidCandidateSpan(candidate) &&
+                HasCandidateRangeOverlap(previous, candidate))
+            {
+                issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                {
+                    Code = "overlapping-range",
+                    Index = candidate.Index,
+                    Message = $"{previous.Index}번과 {candidate.Index}번 범위가 겹칩니다."
+                });
+            }
+        }
+
+        return issues
+            .GroupBy(x => $"{x.Code}:{x.Index}:{x.Message}")
+            .Select(x => x.First())
+            .OrderBy(x => x.Index ?? int.MaxValue)
+            .ThenBy(x => x.Code)
+            .ToArray();
+    }
+
+    private static string BuildStructuralProbeText(
+        OcrQuestionCandidate candidate,
+        int previewLineLimit)
+    {
+        return string.Join(
+            Environment.NewLine,
+            new[] { candidate.Header }
+                .Concat(
+                    SplitPreviewLines(candidate.PreviewText)
+                        .Take(previewLineLimit))
+                .Where(text => !string.IsNullOrWhiteSpace(text)));
+    }
+
+    private static IEnumerable<string> SplitPreviewLines(string? previewText)
+    {
+        return string.IsNullOrWhiteSpace(previewText)
+            ? Array.Empty<string>()
+            : previewText.Split(
+                Environment.NewLine,
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    }
+
+    private static bool HasSuspiciousSharedContextLeak(OcrQuestionCandidate candidate)
+    {
+        foreach (var text in new[] { candidate.Header }
+                     .Concat(SplitPreviewLines(candidate.PreviewText).Take(2)))
+        {
+            if (!LooksLikeStructuralSharedContextMarkerText(text))
+            {
+                continue;
+            }
+
+            if (TryResolveSharedContextRange(text, candidate.Index, out _))
+            {
+                continue;
+            }
+
+            if (TryResolveSharedContextRange(
+                    text,
+                    candidate.Index,
+                    fallbackStartIndex: candidate.Index,
+                    out _))
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool LooksLikeStructuralSharedContextMarkerText(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var normalized = text.Trim();
+        if (!LooksLikeSharedContextMarkerText(normalized))
+        {
+            return false;
+        }
+
+        return QuestionRangeHintRegex.IsMatch(normalized) ||
+               StructuralSharedContextMarkerRegex.IsMatch(normalized) ||
+               (normalized.Contains('(') && SharedContextRangeEndRegex.IsMatch(normalized)) ||
+               (normalized.Contains('（') && SharedContextRangeEndRegex.IsMatch(normalized)) ||
+               (normalized.Contains('(') && SharedContextRangeStartRegex.IsMatch(normalized)) ||
+               (normalized.Contains('（') && SharedContextRangeStartRegex.IsMatch(normalized));
+    }
+
+    private static string? FindStructuralBlockingBoilerplatePhrase(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return null;
+        }
+
+        return StructuralBlockingBoilerplatePhrases.FirstOrDefault(phrase =>
+            text.Contains(phrase, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool HasInvalidCandidateSpan(OcrQuestionCandidate candidate)
+    {
+        if (candidate.LogicalStartOrder > 0 || candidate.LogicalEndOrder > 0)
+        {
+            return candidate.LogicalEndOrder < candidate.LogicalStartOrder;
+        }
+
+        return candidate.EndPage < candidate.StartPage ||
+               (candidate.EndPage == candidate.StartPage &&
+                candidate.EndLineInPage < candidate.StartLineInPage);
+    }
+
+    private static int CompareCandidateStart(OcrQuestionCandidate left, OcrQuestionCandidate right)
+    {
+        var logicalComparison = left.LogicalStartOrder.CompareTo(right.LogicalStartOrder);
+        if (logicalComparison != 0)
+        {
+            return logicalComparison;
+        }
+
+        var pageComparison = left.StartPage.CompareTo(right.StartPage);
+        if (pageComparison != 0)
+        {
+            return pageComparison;
+        }
+
+        return left.StartLineInPage.CompareTo(right.StartLineInPage);
+    }
+
+    private static bool HasCandidateRangeOverlap(
+        OcrQuestionCandidate previous,
+        OcrQuestionCandidate current)
+    {
+        if ((previous.LogicalStartOrder > 0 || previous.LogicalEndOrder > 0) &&
+            (current.LogicalStartOrder > 0 || current.LogicalEndOrder > 0))
+        {
+            return current.LogicalStartOrder <= previous.LogicalEndOrder;
+        }
+
+        if (current.StartPage < previous.EndPage)
+        {
+            return true;
+        }
+
+        return current.StartPage == previous.EndPage &&
+               current.StartLineInPage <= previous.EndLineInPage;
     }
 
     private static string BuildCandidateMismatchMessage(
@@ -2413,6 +2860,7 @@ public class MainViewModel : ViewModelBase
             })
             .ToArray();
         var expectedQuestionRange = expectedQuestionRangeResolution.Range;
+        var structuralIssues = BuildStructuralIssues(rawCandidates);
         var missingIndexes = expectedQuestionRange.HasValue
             ? Enumerable.Range(expectedQuestionRange.Value.StartIndex, expectedQuestionRange.Value.Count)
                 .Except(candidateIndexes)
@@ -2443,11 +2891,13 @@ public class MainViewModel : ViewModelBase
             TotalWordCount = analysis.TotalWordCount,
             RawCandidateCount = rawCandidates.Length,
             DistinctCandidateCount = candidateIndexes.Length,
+            HasBlockingStructuralIssues = structuralIssues.Length > 0,
             HasExpectedQuestionMismatch = hasExpectedQuestionMismatch,
             CandidateIndexes = candidateIndexes,
             MissingIndexes = missingIndexes,
             UnexpectedIndexes = unexpectedIndexes,
             DuplicateIndexes = duplicateIndexes,
+            StructuralIssues = structuralIssues,
             Candidates = rawCandidates
                 .OrderBy(x => x.Index)
                 .ThenBy(x => x.StartPage)
@@ -2456,6 +2906,9 @@ public class MainViewModel : ViewModelBase
                 {
                     Index = x.Index,
                     Header = x.Header,
+                    IsInferred = x.IsInferred,
+                    LogicalStartOrder = x.LogicalStartOrder,
+                    LogicalEndOrder = x.LogicalEndOrder,
                     StartPage = x.StartPage,
                     StartLineInPage = x.StartLineInPage,
                     EndPage = x.EndPage,
@@ -2542,6 +2995,18 @@ public class MainViewModel : ViewModelBase
         }
 
         builder.AppendLine($"중복 번호: {(diagnostics.DuplicateIndexes.Length == 0 ? "없음" : string.Join(", ", diagnostics.DuplicateIndexes.Select(x => $"{x.Index}({x.Count})")))}");
+        builder.AppendLine($"구조 검증 차단: {(diagnostics.HasBlockingStructuralIssues ? "예" : "아니오")}");
+        if (diagnostics.StructuralIssues.Length > 0)
+        {
+            builder.AppendLine("[구조 문제]");
+            foreach (var issue in diagnostics.StructuralIssues)
+            {
+                builder.AppendLine($"- {(issue.Index.HasValue ? $"{issue.Index}번 " : string.Empty)}{issue.Code}: {issue.Message}");
+            }
+
+            builder.AppendLine();
+        }
+
         builder.AppendLine();
         builder.AppendLine("[페이지별 상단 줄]");
         foreach (var page in diagnostics.Pages)
@@ -2557,7 +3022,7 @@ public class MainViewModel : ViewModelBase
         builder.AppendLine("[후보 위치]");
         foreach (var candidate in diagnostics.Candidates)
         {
-            builder.AppendLine($"- {candidate.Index}번 | p{candidate.StartPage}:{candidate.StartLineInPage} -> p{candidate.EndPage}:{candidate.EndLineInPage} | {candidate.Header}");
+            builder.AppendLine($"- {candidate.Index}번{(candidate.IsInferred ? " [추정]" : string.Empty)} | ord {candidate.LogicalStartOrder}->{candidate.LogicalEndOrder} | p{candidate.StartPage}:{candidate.StartLineInPage} -> p{candidate.EndPage}:{candidate.EndLineInPage} | {candidate.Header}");
             if (!string.IsNullOrWhiteSpace(candidate.PreviewText))
             {
                 builder.AppendLine($"  preview: {candidate.PreviewText}");
@@ -2585,11 +3050,13 @@ public class MainViewModel : ViewModelBase
         public int TotalWordCount { get; init; }
         public int RawCandidateCount { get; init; }
         public int DistinctCandidateCount { get; init; }
+        public bool HasBlockingStructuralIssues { get; init; }
         public bool HasExpectedQuestionMismatch { get; init; }
         public int[] CandidateIndexes { get; init; } = Array.Empty<int>();
         public int[] MissingIndexes { get; init; } = Array.Empty<int>();
         public int[] UnexpectedIndexes { get; init; } = Array.Empty<int>();
         public PdfAnalysisDuplicateDiagnostics[] DuplicateIndexes { get; init; } = Array.Empty<PdfAnalysisDuplicateDiagnostics>();
+        public PdfAnalysisStructuralIssueDiagnostics[] StructuralIssues { get; init; } = Array.Empty<PdfAnalysisStructuralIssueDiagnostics>();
         public PdfAnalysisCandidateDiagnostics[] Candidates { get; init; } = Array.Empty<PdfAnalysisCandidateDiagnostics>();
         public PdfAnalysisPageDiagnostics[] Pages { get; init; } = Array.Empty<PdfAnalysisPageDiagnostics>();
     }
@@ -2605,11 +3072,21 @@ public class MainViewModel : ViewModelBase
     {
         public int Index { get; init; }
         public string Header { get; init; } = string.Empty;
+        public bool IsInferred { get; init; }
+        public int LogicalStartOrder { get; init; }
+        public int LogicalEndOrder { get; init; }
         public int StartPage { get; init; }
         public int StartLineInPage { get; init; }
         public int EndPage { get; init; }
         public int EndLineInPage { get; init; }
         public string PreviewText { get; init; } = string.Empty;
+    }
+
+    private sealed class PdfAnalysisStructuralIssueDiagnostics
+    {
+        public string Code { get; init; } = string.Empty;
+        public int? Index { get; init; }
+        public string Message { get; init; } = string.Empty;
     }
 
     private sealed class PdfAnalysisPageDiagnostics

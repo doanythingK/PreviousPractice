@@ -4,6 +4,9 @@ public sealed record OcrQuestionCandidate
 {
     public int Index { get; init; }
     public string Header { get; init; } = string.Empty;
+    public bool IsInferred { get; init; }
+    public int LogicalStartOrder { get; init; }
+    public int LogicalEndOrder { get; init; }
     public int StartPage { get; init; }
     public int EndPage { get; init; }
     public int StartLineInPage { get; init; }
