@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="PreviousPractice.SourceFileDiagnosticsPage"
+             Title="분석 진단">
+    <Grid Padding="12">
+        <Editor x:Name="DiagnosticsEditor"
+                IsReadOnly="True"
+                AutoSize="Disabled"
+                FontFamily="OpenSansRegular" />
+    </Grid>
+</ContentPage>

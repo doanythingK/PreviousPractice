@@ -70,6 +70,9 @@ public class MainViewModel : ViewModelBase
     private static readonly Regex SharedContextRangeStartRegex = new(
         @"(?<!\d)(?<start>\d{1,3})\s*[-~〜]",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex SharedContextRangeEndRegex = new(
+        @"[-~〜]\s*(?<end>\d{1,3})(?:번|문항|문제)?(?!\d)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public ObservableCollection<Category> Categories { get; } = new();
     public ObservableCollection<SourceFileSummary> SourceFiles { get; } = new();
@@ -994,12 +997,53 @@ public class MainViewModel : ViewModelBase
                 firstCandidateInRange.StartLineInPage);
         }
 
+        foreach (var priorCandidate in samePageCandidates
+                     .Where(x => x.StartLineInPage < candidate.StartLineInPage && x.Index < candidate.Index)
+                     .OrderByDescending(x => x.StartLineInPage))
+        {
+            var priorHeaderLine = pageLines.FirstOrDefault(x => x.LineInPage == priorCandidate.StartLineInPage);
+            if (priorHeaderLine == null ||
+                string.IsNullOrWhiteSpace(priorHeaderLine.Text) ||
+                !IsSameColumnLine(priorHeaderLine, anchorLine))
+            {
+                continue;
+            }
+
+            if (!TryResolveSharedContextRange(
+                    priorHeaderLine.Text,
+                    candidate.Index,
+                    priorCandidate.Index,
+                    out var sharedRange))
+            {
+                continue;
+            }
+
+            if (!sharedRange.Contains(candidate.Index))
+            {
+                continue;
+            }
+
+            return new SharedContextDefinition(
+                sharedRange,
+                priorCandidate.StartLineInPage,
+                candidate.StartLineInPage);
+        }
+
         return null;
     }
 
     private static bool TryResolveSharedContextRange(
         string? text,
         int currentIndex,
+        out QuestionNumberRange questionRange)
+    {
+        return TryResolveSharedContextRange(text, currentIndex, fallbackStartIndex: null, out questionRange);
+    }
+
+    private static bool TryResolveSharedContextRange(
+        string? text,
+        int currentIndex,
+        int? fallbackStartIndex,
         out QuestionNumberRange questionRange)
     {
         questionRange = default;
@@ -1021,16 +1065,33 @@ public class MainViewModel : ViewModelBase
         }
 
         var startOnlyMatch = SharedContextRangeStartRegex.Match(normalized);
-        if (!startOnlyMatch.Success ||
-            !int.TryParse(startOnlyMatch.Groups["start"].Value, out var inferredStart) ||
-            inferredStart <= 0)
+        if (startOnlyMatch.Success &&
+            int.TryParse(startOnlyMatch.Groups["start"].Value, out var inferredStart) &&
+            inferredStart > 0)
+        {
+            questionRange = new QuestionNumberRange(
+                inferredStart,
+                inferredStart + MalformedSharedContextFallbackQuestionCount - 1);
+            if (questionRange.Contains(currentIndex))
+            {
+                return true;
+            }
+        }
+
+        if (!fallbackStartIndex.HasValue || fallbackStartIndex.Value <= 0)
         {
             return false;
         }
 
-        questionRange = new QuestionNumberRange(
-            inferredStart,
-            inferredStart + MalformedSharedContextFallbackQuestionCount - 1);
+        var endOnlyMatch = SharedContextRangeEndRegex.Match(normalized);
+        if (!endOnlyMatch.Success ||
+            !int.TryParse(endOnlyMatch.Groups["end"].Value, out var inferredEnd) ||
+            inferredEnd < fallbackStartIndex.Value)
+        {
+            return false;
+        }
+
+        questionRange = new QuestionNumberRange(fallbackStartIndex.Value, inferredEnd);
         return questionRange.Contains(currentIndex);
     }
 
@@ -1486,6 +1547,7 @@ public class MainViewModel : ViewModelBase
         var invalid = Path.GetInvalidFileNameChars();
         return new string(baseName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
     }
+
 
     private static bool TryParseExpectedQuestionInput(
         string? rawValue,
@@ -1962,145 +2024,12 @@ public class MainViewModel : ViewModelBase
 
     private IEnumerable<QuestionImageSliceViewModel> BuildQuestionImageSliceViewModels(Question? question)
     {
-        if (question == null)
-        {
-            yield break;
-        }
-
-        foreach (var segment in ResolveStoredImageSegments(question))
-        {
-            var imageSource = BuildQuestionImageSource(segment.ImagePath);
-            if (imageSource == null)
-            {
-                continue;
-            }
-
-            var left = Math.Clamp(segment.ImageLeftRatio, 0d, 1d);
-            var top = Math.Clamp(segment.ImageTopRatio, 0d, 1d);
-            var right = Math.Clamp(segment.ImageRightRatio, 0d, 1d);
-            var bottom = Math.Clamp(segment.ImageBottomRatio, 0d, 1d);
-            if (right <= left)
-            {
-                right = Math.Min(1d, left + MinQuestionImageSliceWidthRatio);
-            }
-
-            if (bottom <= top)
-            {
-                bottom = Math.Min(1d, top + MinQuestionImageSliceRatio);
-            }
-
-            var contentWidth = CurrentQuestionImageViewportWidth;
-            var (imagePixelWidth, imagePixelHeight) = ResolveImagePixelSize(segment);
-            if (imagePixelWidth <= 0 || imagePixelHeight <= 0)
-            {
-                imagePixelWidth = contentWidth;
-                imagePixelHeight = CurrentQuestionImageViewportHeight;
-            }
-
-            var contentHeight = contentWidth * imagePixelHeight / imagePixelWidth;
-            var visibleWidth = Math.Max(contentWidth * MinQuestionImageSliceWidthRatio, (right - left) * contentWidth);
-            var visibleHeight = Math.Max(contentHeight * MinQuestionImageSliceRatio, (bottom - top) * contentHeight);
-
-            yield return new QuestionImageSliceViewModel
-            {
-                ImageSource = imageSource,
-                VisibleWidth = visibleWidth,
-                VisibleHeight = visibleHeight,
-                ContentWidth = contentWidth,
-                ContentHeight = contentHeight,
-                TranslationX = -left * contentWidth,
-                TranslationY = -top * contentHeight
-            };
-        }
-    }
-
-    private static (double Width, double Height) ResolveImagePixelSize(QuestionImageSegment segment)
-    {
-        if (segment.ImagePixelWidth > 0 && segment.ImagePixelHeight > 0)
-        {
-            return (segment.ImagePixelWidth, segment.ImagePixelHeight);
-        }
-
-        return TryReadPngSize(segment.ImagePath, out var width, out var height)
-            ? (width, height)
-            : (0d, 0d);
-    }
-
-    private static bool TryReadPngSize(string? imagePath, out int width, out int height)
-    {
-        width = 0;
-        height = 0;
-
-        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
-        {
-            return false;
-        }
-
-        try
-        {
-            using var stream = File.OpenRead(imagePath);
-            Span<byte> header = stackalloc byte[24];
-            if (stream.Read(header) < header.Length)
-            {
-                return false;
-            }
-
-            Span<byte> pngSignature = stackalloc byte[] { 137, 80, 78, 71, 13, 10, 26, 10 };
-            if (!header[..8].SequenceEqual(pngSignature))
-            {
-                return false;
-            }
-
-            width = BinaryPrimitives.ReadInt32BigEndian(header.Slice(16, 4));
-            height = BinaryPrimitives.ReadInt32BigEndian(header.Slice(20, 4));
-            return width > 0 && height > 0;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    private static IEnumerable<QuestionImageSegment> ResolveStoredImageSegments(Question question)
-    {
-        if (question.ImageSegments != null && question.ImageSegments.Length > 0)
-        {
-            return question.ImageSegments
-                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.ImagePath));
-        }
-
-        if (string.IsNullOrWhiteSpace(question.ImagePath))
-        {
-            return Array.Empty<QuestionImageSegment>();
-        }
-
-        return new[]
-        {
-            new QuestionImageSegment
-            {
-                PageIndex = 1,
-                ImagePath = question.ImagePath,
-                ImageTopRatio = question.ImageTopRatio,
-                ImageBottomRatio = question.ImageBottomRatio
-            }
-        };
-    }
-
-    private static ImageSource? BuildQuestionImageSource(string? imagePath)
-    {
-        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
-        {
-            return null;
-        }
-
-        try
-        {
-            return ImageSource.FromStream(() => File.OpenRead(imagePath));
-        }
-        catch
-        {
-            return null;
-        }
+        return QuestionImageSliceBuilder.Build(
+            question,
+            CurrentQuestionImageViewportWidth,
+            CurrentQuestionImageViewportHeight,
+            MinQuestionImageSliceRatio,
+            MinQuestionImageSliceWidthRatio);
     }
 
     private async Task ReloadWrongAsync()

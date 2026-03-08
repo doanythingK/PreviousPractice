@@ -67,6 +67,7 @@
                                 <Frame Padding="8" Margin="0,0,0,8" BorderColor="#E2E8F0">
                                     <HorizontalStackLayout Spacing="8">
                                         <Label Text="{Binding DisplayText}" VerticalTextAlignment="Center" />
+                                        <Button Text="보기" Clicked="OnOpenSourceFileReviewClicked" CommandParameter="{Binding}" />
                                         <Button Text="삭제" Command="{Binding Source={x:Reference Root}, Path=BindingContext.DeleteSourceFileCommand}" CommandParameter="{Binding}" />
                                     </HorizontalStackLayout>
                                 </Frame>
