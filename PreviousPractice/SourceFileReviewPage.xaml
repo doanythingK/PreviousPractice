@@ -7,7 +7,7 @@
              x:DataType="viewModels:SourceFileReviewViewModel"
              x:Name="ReviewPage"
              Title="{Binding PageTitle}"
-             BackgroundColor="#F8FAFC">
+             BackgroundColor="{StaticResource PageBackgroundColor}">
 
     <ContentPage.ToolbarItems>
         <ToolbarItem Text="진단" Clicked="OnOpenDiagnosticsClicked" />

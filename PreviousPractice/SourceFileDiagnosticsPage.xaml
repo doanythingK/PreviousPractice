@@ -3,7 +3,7 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
              x:Class="PreviousPractice.SourceFileDiagnosticsPage"
              Title="분석 진단"
-             BackgroundColor="#F8FAFC">
+             BackgroundColor="{StaticResource PageBackgroundColor}">
     <Grid Padding="16" RowDefinitions="Auto,Auto,*" RowSpacing="12">
         <Frame Grid.Row="0" Padding="14" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
             <VerticalStackLayout Spacing="4">

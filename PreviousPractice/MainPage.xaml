@@ -7,7 +7,7 @@
              x:DataType="viewModels:MainViewModel"
              x:Name="Root"
              Title="기출문제 연습프로그램"
-             BackgroundColor="#F8FAFC">
+             BackgroundColor="{StaticResource PageBackgroundColor}">
 
     <ContentPage.BindingContext>
         <viewModels:MainViewModel />
