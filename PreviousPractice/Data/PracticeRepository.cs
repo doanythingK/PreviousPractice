@@ -303,31 +303,27 @@ public sealed class PracticeRepository : IPracticeRepository
 
                 if (!overwriteBySourceFile && existing != null)
                 {
-                    if (!string.IsNullOrWhiteSpace(question.Prompt))
-                    {
-                        existing.Prompt = question.Prompt;
-                    }
-
-                    var hadCorrectAnswers = existing.CorrectAnswers.Any();
-                    existing.ImageSegments = CloneImageSegments(question);
-                    existing.ImagePath = question.ImagePath;
-                    existing.ImageTopRatio = question.ImageTopRatio;
-                    existing.ImageBottomRatio = question.ImageBottomRatio;
-
                     if (updateExistingCorrectAnswers)
                     {
                         existing.CorrectAnswers = question.CorrectAnswers;
-                        if (question.CorrectAnswers.Length > 0 || !hadCorrectAnswers)
-                        {
-                            existing.Type = question.Type;
-                        }
+                        existing.Type = question.Type;
                     }
                     else
                     {
+                        if (!string.IsNullOrWhiteSpace(question.Prompt))
+                        {
+                            existing.Prompt = question.Prompt;
+                        }
+
+                        existing.ImageSegments = CloneImageSegments(question);
+                        existing.ImagePath = question.ImagePath;
+                        existing.ImageTopRatio = question.ImageTopRatio;
+                        existing.ImageBottomRatio = question.ImageBottomRatio;
                         existing.Type = question.Type;
+                        existing.CorrectAnswers = question.CorrectAnswers;
+                        existing.Choices = question.Choices;
                     }
 
-                    existing.Choices = question.Choices;
                     continue;
                 }
 

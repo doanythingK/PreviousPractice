@@ -11,18 +11,25 @@ public static class OcrQuestionSegmenter
     private const double LeftColumnMidpointThreshold = 0.45d;
     private const double RightColumnMidpointThreshold = 0.55d;
     private const int MinColumnLineCount = 5;
+    private const int MaxQuestionIndexForwardGap = 8;
     // OCR이 페이지를 한 줄로 뭉개는 경우, " 1. ", " 2) " 같은 번호 앞에 강제로 줄바꿈을 삽입한다.
     private static readonly Regex SyntheticQuestionBreakRegex = new(
-        @"(?<=\s)(?<header>(?:[1-9]|[1-9]\d)\s*[.)])(?=\s)",
+        @"(?<prefix>^|\s)(?<header>(?:[1-9]|[1-9]\d)\s*[.)•·])(?=\s)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex QuestionRangeRegex = new(
+        @"[<(（【〔［]?\s*(?<start>\d{1,3})\s*[-~〜]\s*(?<end>\d{1,3})\s*[>)）】〕］]?",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex SingleLineHeaderRegex = new(
-        @"^\s*(?:[Qq]\s*)?(?:(?:제|문항|문제)\s*)?(?<index>\d{1,3})\s*(?:[.)\]\-:：]|\s|$)",
+        @"^\s*(?:[Qq]\s*)?(?:(?:제|문항|문제)\s*)?(?<index>\d{1,3})\s*(?:[.)\]\-:：•·]|\s|$)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly string[] BlockingBoilerplatePhrases =
     [
         "출제위원",
         "출제범위",
         "출석수업대체시험",
+        "정답 하나",
+        "답안정정",
+        "답안지에 표기",
         "다음 면에 계속",
         "앞면에서 계속"
     ];
@@ -30,14 +37,15 @@ public static class OcrQuestionSegmenter
         @"[<(（【〔［]?[^\r\n]{0,8}(?:\d{1,3}|[%A-Za-z가-힣①-⑳㉠-㉻])\s*[-~〜]\s*(?:\d{1,3}|[%A-Za-z가-힣①-⑳㉠-㉻])[^\r\n]{0,8}[>)）】〕］]?\s*(?:다음|보고|답하)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex QuestionCueRegex = new(
-        @"(?:다음|옳은|틀린|고른|설명|해석|판단|답하|보고|보기|물음|맞는|아닌|고르시오|구하)",
+        @"(?:다음|옳은|틀린|고른|설명|해석|판단|답하|보고|보기|물음|맞는|아닌|않은|고르시오|구하|무엇|해당|정의|알맞|올바|바르|사용|넣을|들어갈)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     public static IReadOnlyList<OcrQuestionCandidate> SplitByHeader(
         IReadOnlyList<OcrPageResult> pages,
         QuestionNumberRange? expectedQuestionRange = null)
     {
-        if (!TryBuildNormalizedDocument(pages, expectedQuestionRange, out var document))
+        var effectiveQuestionRange = expectedQuestionRange ?? InferQuestionRangeFromPages(pages);
+        if (!TryBuildNormalizedDocument(pages, effectiveQuestionRange, out var document))
         {
             return Array.Empty<OcrQuestionCandidate>();
         }
@@ -63,7 +71,7 @@ public static class OcrQuestionSegmenter
                 headerRegexMatchCount++;
             }
 
-            if (TryMatchQuestionHeader(lines, i, SingleLineHeaderRegex, expectedQuestionRange, out var index))
+            if (TryMatchQuestionHeader(lines, i, SingleLineHeaderRegex, effectiveQuestionRange, out var index))
             {
                 if (ShouldStartNewCandidate(current, index))
                 {
@@ -120,7 +128,7 @@ public static class OcrQuestionSegmenter
             candidates = SplitByPermissiveHeader(
                     lines,
                     pageLineCounts,
-                    expectedQuestionRange,
+                    effectiveQuestionRange,
                     out headerRegexMatchCount,
                     out normalizedIndexMatchCount,
                     out duplicateIndexCount)
@@ -137,12 +145,12 @@ public static class OcrQuestionSegmenter
             return fallback;
         }
 
-        if (expectedQuestionRange.HasValue)
+        if (effectiveQuestionRange.HasValue)
         {
             candidates = RecoverExpectedRangeCandidates(
                 lines,
                 pageLineCounts,
-                expectedQuestionRange.Value,
+                effectiveQuestionRange.Value,
                 candidates);
         }
 
@@ -191,6 +199,61 @@ public static class OcrQuestionSegmenter
         return rebuilt;
     }
 
+    private static QuestionNumberRange? InferQuestionRangeFromPages(IReadOnlyList<OcrPageResult> pages)
+    {
+        foreach (var text in EnumerateRangeHintText(pages).Take(80))
+        {
+            foreach (Match match in QuestionRangeRegex.Matches(text))
+            {
+                if (!int.TryParse(match.Groups["start"].Value, out var startIndex) ||
+                    !int.TryParse(match.Groups["end"].Value, out var endIndex) ||
+                    startIndex <= 0 ||
+                    endIndex < startIndex)
+                {
+                    continue;
+                }
+
+                var range = new QuestionNumberRange(startIndex, endIndex);
+                if (range.Count is < 5 or > 100)
+                {
+                    continue;
+                }
+
+                AppLog.Info(
+                    nameof(OcrQuestionSegmenter),
+                    $"문항 범위 자동 감지 | range={range} | text={TrimToLength(text.Trim(), 80)}");
+                return range;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> EnumerateRangeHintText(IReadOnlyList<OcrPageResult> pages)
+    {
+        foreach (var page in pages.OrderBy(x => x.PageIndex).Take(3))
+        {
+            if (page.Lines != null && page.Lines.Count > 0)
+            {
+                foreach (var line in page.Lines
+                             .OrderBy(x => x.LineInPage)
+                             .Take(40)
+                             .Select(x => x.Text)
+                             .Where(x => !string.IsNullOrWhiteSpace(x)))
+                {
+                    yield return line;
+                }
+            }
+
+            foreach (var line in page.Text
+                         .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                         .Take(40))
+            {
+                yield return line;
+            }
+        }
+    }
+
     private static List<OcrQuestionCandidate> RecoverExpectedRangeCandidates(
         IReadOnlyList<ParsedLine> lines,
         IReadOnlyDictionary<int, int> pageLineCounts,
@@ -204,9 +267,10 @@ public static class OcrQuestionSegmenter
 
         var linePositions = lines
             .Select((line, position) => new { line.PageIndex, line.LineInPage, Position = position })
+            .GroupBy(x => (x.PageIndex, x.LineInPage))
             .ToDictionary(
-                x => (x.PageIndex, x.LineInPage),
-                x => x.Position);
+                x => x.Key,
+                x => x.First().Position);
 
         var markers = candidates
             .Where(x => x.Index > 0 && expectedQuestionRange.Contains(x.Index))
@@ -379,6 +443,15 @@ public static class OcrQuestionSegmenter
                 }
 
                 var gapMarkers = InferGapMarkers(lines, current, next, missingCount);
+                if (gapMarkers.Count < missingCount)
+                {
+                    gapMarkers = CompleteGapMarkersByPosition(
+                        lines,
+                        current,
+                        next,
+                        missingCount,
+                        gapMarkers);
+                }
                 if (gapMarkers.Count == 0)
                 {
                     continue;
@@ -409,6 +482,84 @@ public static class OcrQuestionSegmenter
         }
 
         return orderedMarkers;
+    }
+
+    private static List<StartMarker> CompleteGapMarkersByPosition(
+        IReadOnlyList<ParsedLine> lines,
+        StartMarker current,
+        StartMarker next,
+        int missingCount,
+        IReadOnlyList<StartMarker> detectedMarkers)
+    {
+        var gapStart = current.Position + 1;
+        var gapEnd = next.Position - 1;
+        if (missingCount <= 0 || gapStart > gapEnd)
+        {
+            return detectedMarkers.ToList();
+        }
+
+        var completed = detectedMarkers
+            .OrderBy(x => x.Position)
+            .ToList();
+        for (var i = 0; i < missingCount; i++)
+        {
+            var missingIndex = current.Index + i + 1;
+            if (completed.Any(x => x.Index == missingIndex))
+            {
+                continue;
+            }
+
+            var preferredPosition = current.Position +
+                                    (int)Math.Round((next.Position - current.Position) * ((double)(i + 1) / (missingCount + 1)));
+            var position = ResolveUnusedGapPosition(
+                preferredPosition,
+                gapStart,
+                gapEnd,
+                completed.Select(x => x.Position).ToHashSet());
+            var line = lines[position];
+            completed.Add(new StartMarker(
+                missingIndex,
+                position,
+                line.PageIndex,
+                line.LineInPage,
+                $"[추정] {missingIndex}. {line.Text}",
+                ImagePath: null,
+                Inferred: true));
+        }
+
+        return completed
+            .OrderBy(x => x.Position)
+            .ToList();
+    }
+
+    private static int ResolveUnusedGapPosition(
+        int preferredPosition,
+        int gapStart,
+        int gapEnd,
+        ISet<int> usedPositions)
+    {
+        var clamped = Math.Clamp(preferredPosition, gapStart, gapEnd);
+        if (!usedPositions.Contains(clamped))
+        {
+            return clamped;
+        }
+
+        for (var offset = 1; offset <= gapEnd - gapStart; offset++)
+        {
+            var backward = clamped - offset;
+            if (backward >= gapStart && !usedPositions.Contains(backward))
+            {
+                return backward;
+            }
+
+            var forward = clamped + offset;
+            if (forward <= gapEnd && !usedPositions.Contains(forward))
+            {
+                return forward;
+            }
+        }
+
+        return clamped;
     }
 
     private static List<StartMarker> InferGapMarkers(
@@ -715,7 +866,8 @@ public static class OcrQuestionSegmenter
             return true;
         }
 
-        return index > current.Index;
+        return index > current.Index &&
+               index - current.Index <= MaxQuestionIndexForwardGap;
     }
 
     private static OcrLineResult[] ReorderPageLinesByColumns(IReadOnlyList<OcrLineResult> lines)
@@ -795,14 +947,20 @@ public static class OcrQuestionSegmenter
                     }
 
                     maxLineInPage = Math.Max(maxLineInPage, line.LineInPage);
-                    lines.Add(new ParsedLine(
+                    var parsedLine = new ParsedLine(
                         pageNumber,
                         line.LineInPage,
                         line.Text.Trim(),
                         line.LeftRatio,
                         line.TopRatio,
                         line.RightRatio,
-                        line.BottomRatio));
+                        line.BottomRatio);
+                    var expandedLines = ExpandParsedLine(parsedLine);
+                    syntheticBreakCount += Math.Max(0, expandedLines.Count - 1);
+                    foreach (var expandedLine in expandedLines)
+                    {
+                        lines.Add(expandedLine);
+                    }
                 }
 
                 pageLineCounts[pageNumber] = Math.Max(1, maxLineInPage);
@@ -822,7 +980,12 @@ public static class OcrQuestionSegmenter
             foreach (var line in trimmedTextLines)
             {
                 lineInPage = Math.Max(lineInPage, line.LineInPage);
-                lines.Add(line);
+                var expandedLines = ExpandParsedLine(line);
+                syntheticBreakCount += Math.Max(0, expandedLines.Count - 1);
+                foreach (var expandedLine in expandedLines)
+                {
+                    lines.Add(expandedLine);
+                }
             }
 
             pageLineCounts[pageNumber] = Math.Max(
@@ -840,6 +1003,22 @@ public static class OcrQuestionSegmenter
 
         document = new NormalizedOcrDocument(lines, pageLineCounts, syntheticBreakCount);
         return true;
+    }
+
+    private static IReadOnlyList<ParsedLine> ExpandParsedLine(ParsedLine line)
+    {
+        var expandedText = ExpandSyntheticLineBreaks(line.Text, out _);
+        var parts = expandedText
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToArray();
+        if (parts.Length == 0)
+        {
+            return Array.Empty<ParsedLine>();
+        }
+
+        return parts
+            .Select(part => line with { Text = part.Trim() })
+            .ToArray();
     }
 
     private static int GetColumnIndex(OcrLineResult line)
@@ -1005,8 +1184,9 @@ public static class OcrQuestionSegmenter
 
         if (!string.IsNullOrWhiteSpace(suffix))
         {
-            return CountHangulCharacters(suffix) >= 2 ||
-                   suffix.Contains('?') ||
+            return suffix.Contains('?') ||
+                   QuestionCueRegex.IsMatch(suffix) ||
+                   CountHangulCharacters(suffix) >= 8 ||
                    LooksLikeQuestionContinuation(nextLineText);
         }
 

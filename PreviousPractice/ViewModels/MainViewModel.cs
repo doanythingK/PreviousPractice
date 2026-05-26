@@ -748,21 +748,17 @@ public class MainViewModel : ViewModelBase
                 return;
             }
 
+            var existingCount = await repository.GetQuestionCountBySourceFileAsync(
+                SelectedCategory.Id,
+                normalizedSourceFileName);
             var shouldOverwrite = OverwriteExisting;
-            if (shouldOverwrite)
+            if (shouldOverwrite && existingCount > 0)
             {
-                var existingCount = await repository.GetQuestionCountBySourceFileAsync(
-                    SelectedCategory.Id,
-                    normalizedSourceFileName);
-
-                if (existingCount > 0)
+                shouldOverwrite = await ConfirmOverwriteImportAsync(normalizedSourceFileName, existingCount);
+                if (!shouldOverwrite)
                 {
-                    shouldOverwrite = await ConfirmOverwriteImportAsync(normalizedSourceFileName, existingCount);
-                    if (!shouldOverwrite)
-                    {
-                        Feedback = "문항 반영을 취소했습니다.";
-                        return;
-                    }
+                    Feedback = "문항 반영을 취소했습니다.";
+                    return;
                 }
             }
 
@@ -787,6 +783,12 @@ public class MainViewModel : ViewModelBase
                 .Select(x =>
                 {
                     var hasAnswer = answerByIndex.TryGetValue(x, out var parsedQuestion);
+                    var correctAnswers = hasAnswer && parsedQuestion != null
+                        ? parsedQuestion.CorrectAnswers
+                        : Array.Empty<string>();
+                    var questionType = hasAnswer && parsedQuestion != null
+                        ? parsedQuestion.Type
+                        : QuestionType.MultipleChoice;
                     candidateByIndex.TryGetValue(x, out var matchedCandidate);
                     var imageSegments = BuildQuestionImageSegments(
                         matchedCandidate,
@@ -806,12 +808,8 @@ public class MainViewModel : ViewModelBase
                         CategoryId = SelectedCategory.Id,
                         SourceFileName = normalizedSourceFileName,
                         Index = x,
-                        Type = hasAnswer
-                            ? parsedQuestion.Type
-                            : QuestionType.MultipleChoice,
-                        CorrectAnswers = hasAnswer
-                            ? parsedQuestion.CorrectAnswers
-                            : Array.Empty<string>(),
+                        Type = questionType,
+                        CorrectAnswers = correctAnswers,
                         Choices = Array.Empty<string>(),
                         ImageSegments = imageSegments,
                         ImagePath = primaryImageSegment?.ImagePath,
@@ -857,13 +855,17 @@ public class MainViewModel : ViewModelBase
                 updateExistingCorrectAnswers: true);
 
             var mismatchMessage = BuildCandidateMismatchMessage(analysis, result, questions);
+            var existingQuestionUpdateMessage = existingCount > 0 && !shouldOverwrite
+                ? "기존 문항 구조는 유지하고 정답만 갱신했습니다"
+                : string.Empty;
             var summary = result.HasErrors || !string.IsNullOrWhiteSpace(mismatchMessage)
                 ? $"{questions.Length}개 저장"
                   + (!result.HasErrors ? string.Empty : $"(일부 파싱 오류: {string.Join(", ", result.Errors)})")
                   + (string.IsNullOrWhiteSpace(mismatchMessage) ? string.Empty : $" / {mismatchMessage}")
                 : $"{questions.Length}개 저장 완료";
 
-            Feedback = $"{analysis.Summary} / {summary}";
+            Feedback = $"{analysis.Summary} / {summary}"
+                       + (string.IsNullOrWhiteSpace(existingQuestionUpdateMessage) ? string.Empty : $" / {existingQuestionUpdateMessage}");
             AppLog.Info(
                 nameof(MainViewModel),
                 $"문항 반영 완료 | file={sourceFilePath} | saved={questions.Length}");
@@ -1473,7 +1475,7 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private async Task LoadSourceFilesFromDirectoryAsync()
+    private Task LoadSourceFilesFromDirectoryAsync()
     {
         try
         {
@@ -1484,7 +1486,8 @@ public class MainViewModel : ViewModelBase
                 .SelectMany(directory => Directory.EnumerateFiles(directory))
                 .Where(path => string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase))
                 .Select(Path.GetFileName)
-                .Where(name => !string.IsNullOrWhiteSpace(name) && seenFiles.Add(name!))
+                .Where(name => !string.IsNullOrWhiteSpace(name) && seenFiles.Add(name))
+                .Select(name => name!)
                 .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
@@ -1501,7 +1504,7 @@ public class MainViewModel : ViewModelBase
             else if (string.IsNullOrWhiteSpace(SelectedSourceFileName) ||
                      !SourceFilesDirectory.Contains(SelectedSourceFileName, StringComparer.OrdinalIgnoreCase))
             {
-                SelectedSourceFileName = SourceFilesDirectory.FirstOrDefault();
+                SelectedSourceFileName = SourceFilesDirectory.FirstOrDefault() ?? string.Empty;
             }
         }
         catch (Exception ex)
@@ -1510,6 +1513,7 @@ public class MainViewModel : ViewModelBase
         }
 
         OnPropertyChanged(nameof(CanImportAnswerMap));
+        return Task.CompletedTask;
     }
 
     private async Task ImportSourceFileAsync()
@@ -1934,7 +1938,8 @@ public class MainViewModel : ViewModelBase
 
     private static async Task<bool> ConfirmOverwriteImportAsync(string sourceFileName, int existingCount)
     {
-        if (Application.Current?.MainPage == null)
+        var page = App.CurrentPage;
+        if (page == null)
         {
             return true;
         }
@@ -1942,7 +1947,7 @@ public class MainViewModel : ViewModelBase
         var message = $"'{sourceFileName}' 파일의 문항 {existingCount}개가 이미 등록되어 있습니다.\n" +
                       "덮어써서 새로 반영하시겠습니까?";
 
-        return await Application.Current.MainPage.DisplayAlert(
+        return await page.DisplayAlert(
             "문항 반영",
             message,
             "덮어쓰기",
@@ -1951,14 +1956,15 @@ public class MainViewModel : ViewModelBase
 
     private static async Task<bool> ConfirmOverwriteSourceFileAsync(string sourceFileName)
     {
-        if (Application.Current?.MainPage == null)
+        var page = App.CurrentPage;
+        if (page == null)
         {
             return false;
         }
 
         var message = $"'{sourceFileName}' 파일이 이미 존재합니다.\n덮어쓰기 하시겠습니까?";
 
-        return await Application.Current.MainPage.DisplayAlert(
+        return await page.DisplayAlert(
             "문항 파일 등록",
             message,
             "덮어쓰기",
@@ -2185,14 +2191,15 @@ public class MainViewModel : ViewModelBase
 
     private static async Task<bool> ConfirmDeleteSourceFileAsync(string sourceFileName, int questionCount)
     {
-        if (Application.Current?.MainPage == null)
+        var page = App.CurrentPage;
+        if (page == null)
         {
             return true;
         }
 
         var message = $"'{sourceFileName}'의 문항 {questionCount}개를 삭제하시겠습니까?";
 
-        return await Application.Current.MainPage.DisplayAlert(
+        return await page.DisplayAlert(
             "문항 파일 삭제",
             message,
             "삭제",
@@ -2242,7 +2249,8 @@ public class MainViewModel : ViewModelBase
 
     private static async Task<bool> ConfirmDeleteAsync(string categoryName, int questionCount)
     {
-        if (Application.Current?.MainPage == null)
+        var page = App.CurrentPage;
+        if (page == null)
         {
             return true;
         }
@@ -2250,7 +2258,7 @@ public class MainViewModel : ViewModelBase
         var message = $"'{categoryName}' 카테고리를 삭제하면 해당 카테고리의 문제와 오답 목록이 함께 삭제됩니다.\n" +
                       $"{questionCount}개 문항을 모두 삭제하시겠습니까?";
 
-        return await Application.Current.MainPage.DisplayAlert(
+        return await page.DisplayAlert(
             "카테고리 삭제",
             message,
             "삭제",
@@ -2324,6 +2332,7 @@ public class MainViewModel : ViewModelBase
         {
             directories.Add(currentDir);
             directories.Add(Path.Combine(currentDir, "src"));
+            AddAncestorSourceDirectories(directories, currentDir);
         }
 
         var appDir = AppContext.BaseDirectory;
@@ -2331,11 +2340,20 @@ public class MainViewModel : ViewModelBase
         {
             directories.Add(appDir);
             directories.Add(Path.Combine(appDir, "src"));
-            var projectRootCandidate = Path.GetFullPath(Path.Combine(appDir, "..", "..", "..", "..", ".."));
-            directories.Add(Path.Combine(projectRootCandidate, "src"));
+            AddAncestorSourceDirectories(directories, appDir);
         }
 
         return directories.Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static void AddAncestorSourceDirectories(ICollection<string> directories, string startDirectory)
+    {
+        var directory = new DirectoryInfo(Path.GetFullPath(startDirectory));
+        for (var depth = 0; depth < 10 && directory != null; depth++)
+        {
+            directories.Add(Path.Combine(directory.FullName, "src"));
+            directory = directory.Parent;
+        }
     }
 
     private void UpdatePracticeState()

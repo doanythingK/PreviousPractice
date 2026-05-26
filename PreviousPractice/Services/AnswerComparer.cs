@@ -4,7 +4,7 @@ namespace PreviousPractice.Services;
 
 public static class AnswerComparer
 {
-    public static bool IsCorrect(Question question, string rawInput)
+    public static bool IsCorrect(Question question, string? rawInput)
     {
         if (question == null)
         {
@@ -29,14 +29,15 @@ public static class AnswerComparer
         return question.CorrectAnswers.Any(x => NormalizeSubjective(x) == normalizedCandidate);
     }
 
-    private static string NormalizeSubjective(string value)
+    private static string NormalizeSubjective(string? value)
     {
-        return (value ?? string.Empty)
-            .Trim()
+        return new string((value ?? string.Empty)
+                .Where(x => !char.IsWhiteSpace(x))
+                .ToArray())
             .ToUpperInvariant();
     }
 
-    private static int? ParseInt(string raw)
+    private static int? ParseInt(string? raw)
     {
         if (int.TryParse(raw?.Trim(), out var value))
         {

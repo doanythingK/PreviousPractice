@@ -600,14 +600,17 @@ public sealed class PdfAnalysisService : IPdfAnalysisService
             }
 
             paths.Add(baseDirectory);
-            paths.Add(Path.Combine(baseDirectory, "tools"));
-            paths.Add(Path.Combine(baseDirectory, "tools", "linux"));
-            paths.Add(Path.Combine(baseDirectory, "tools", "mac"));
-            paths.Add(Path.Combine(baseDirectory, "tools", "android"));
-
-            if (OperatingSystem.IsWindows())
+            foreach (var toolsDirectoryName in new[] { "Tools", "tools" })
             {
-                paths.Add(Path.Combine(baseDirectory, "tools", "windows"));
+                paths.Add(Path.Combine(baseDirectory, toolsDirectoryName));
+                paths.Add(Path.Combine(baseDirectory, toolsDirectoryName, "linux"));
+                paths.Add(Path.Combine(baseDirectory, toolsDirectoryName, "mac"));
+                paths.Add(Path.Combine(baseDirectory, toolsDirectoryName, "android"));
+
+                if (OperatingSystem.IsWindows())
+                {
+                    paths.Add(Path.Combine(baseDirectory, toolsDirectoryName, "windows"));
+                }
             }
         }
 

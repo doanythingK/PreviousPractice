@@ -6,7 +6,12 @@ public partial class App : Application
     {
         InitializeComponent();
         UserAppTheme = AppTheme.Light;
-
-        MainPage = new NavigationPage(new MainPage());
     }
+
+    protected override Window CreateWindow(IActivationState? activationState)
+    {
+        return new Window(new NavigationPage(new MainPage()));
+    }
+
+    public static Page? CurrentPage => Current?.Windows.FirstOrDefault()?.Page;
 }
