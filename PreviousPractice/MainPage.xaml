@@ -13,71 +13,131 @@
         <viewModels:MainViewModel />
     </ContentPage.BindingContext>
 
-    <Grid Padding="16" RowDefinitions="Auto,Auto,*" RowSpacing="16">
-        <Frame Grid.Row="0" Padding="18" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
-            <VerticalStackLayout Spacing="14">
-                <VerticalStackLayout Spacing="4">
-                    <Label Text="기출문제 연습프로그램" FontSize="30" FontAttributes="Bold" TextColor="#0F172A" />
+    <Grid Padding="12" RowDefinitions="Auto,Auto,*" RowSpacing="10">
+        <Frame Grid.Row="0" Padding="12" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
+            <Grid RowDefinitions="Auto,Auto" RowSpacing="10">
+                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                    <Label Text="기출문제 연습프로그램"
+                           FontSize="22"
+                           FontAttributes="Bold"
+                           TextColor="#0F172A"
+                           VerticalTextAlignment="Center"
+                           SemanticProperties.HeadingLevel="Level1">
+                        <Label.Triggers>
+                            <DataTrigger TargetType="Label" Binding="{Binding UseWideWorkspaceLayout}" Value="True">
+                                <Setter Property="FontSize" Value="30" />
+                            </DataTrigger>
+                        </Label.Triggers>
+                    </Label>
+                    <Button Grid.Column="1"
+                            Text="{Binding TopSummaryToggleText}"
+                            Command="{Binding ToggleTopSummaryCommand}"
+                            Padding="12,6"
+                            HeightRequest="36"
+                            CornerRadius="10"
+                            BackgroundColor="#F8FAFC"
+                            TextColor="#0F172A"
+                            BorderColor="#CBD5E1"
+                            BorderWidth="1" />
+                </Grid>
+
+                <VerticalStackLayout Grid.Row="1" Spacing="12" IsVisible="{Binding IsTopSummaryExpanded}">
                     <Label Text="작업, 연습, 오답을 분리해서 현재 해야 할 일만 보이도록 정리했습니다." TextColor="#475569" LineBreakMode="WordWrap" />
+
+                    <Grid IsVisible="{Binding UseWideWorkspaceLayout}" ColumnDefinitions="*,*,*" ColumnSpacing="10">
+                        <Frame Grid.Column="0" Padding="12" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="현재 카테고리 문항" FontSize="12" TextColor="#64748B" />
+                                <Label Text="{Binding SelectedCategoryQuestionCountText}" FontSize="24" FontAttributes="Bold" TextColor="#0F172A" />
+                            </VerticalStackLayout>
+                        </Frame>
+                        <Frame Grid.Column="1" Padding="12" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="연습 가능 최대" FontSize="12" TextColor="#64748B" />
+                                <Label Text="{Binding MaxPracticeCount}" FontSize="24" FontAttributes="Bold" TextColor="#0F172A" />
+                            </VerticalStackLayout>
+                        </Frame>
+                        <Frame Grid.Column="2" Padding="12" BorderColor="#D1FAE5" BackgroundColor="#F0FDFA" HasShadow="False">
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="오답 수" FontSize="12" TextColor="#0F766E" />
+                                <Label Text="{Binding WrongQuestionCount}" FontSize="24" FontAttributes="Bold" TextColor="#0F766E" />
+                            </VerticalStackLayout>
+                        </Frame>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="10" RowSpacing="10">
+                        <Grid.Triggers>
+                            <DataTrigger TargetType="Grid" Binding="{Binding UseWideWorkspaceLayout}" Value="True">
+                                <Setter Property="IsVisible" Value="False" />
+                            </DataTrigger>
+                        </Grid.Triggers>
+                        <Frame Grid.Row="0" Grid.Column="0" Padding="12" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="현재 카테고리 문항" FontSize="12" TextColor="#64748B" />
+                                <Label Text="{Binding SelectedCategoryQuestionCountText}" FontSize="22" FontAttributes="Bold" TextColor="#0F172A" />
+                            </VerticalStackLayout>
+                        </Frame>
+                        <Frame Grid.Row="0" Grid.Column="1" Padding="12" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="연습 가능 최대" FontSize="12" TextColor="#64748B" />
+                                <Label Text="{Binding MaxPracticeCount}" FontSize="22" FontAttributes="Bold" TextColor="#0F172A" />
+                            </VerticalStackLayout>
+                        </Frame>
+                        <Frame Grid.Row="1" Grid.ColumnSpan="2" Padding="12" BorderColor="#D1FAE5" BackgroundColor="#F0FDFA" HasShadow="False">
+                            <VerticalStackLayout Spacing="4">
+                                <Label Text="오답 수" FontSize="12" TextColor="#0F766E" />
+                                <Label Text="{Binding WrongQuestionCount}" FontSize="22" FontAttributes="Bold" TextColor="#0F766E" />
+                            </VerticalStackLayout>
+                        </Frame>
+                    </Grid>
                 </VerticalStackLayout>
-
-                <Grid IsVisible="{Binding UseWideWorkspaceLayout}" ColumnDefinitions="*,*,*" ColumnSpacing="10">
-                    <Frame Grid.Column="0" Padding="12" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
-                        <VerticalStackLayout Spacing="4">
-                            <Label Text="현재 카테고리 문항" FontSize="12" TextColor="#64748B" />
-                            <Label Text="{Binding SelectedCategoryQuestionCountText}" FontSize="24" FontAttributes="Bold" TextColor="#0F172A" />
-                        </VerticalStackLayout>
-                    </Frame>
-                    <Frame Grid.Column="1" Padding="12" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
-                        <VerticalStackLayout Spacing="4">
-                            <Label Text="연습 가능 최대" FontSize="12" TextColor="#64748B" />
-                            <Label Text="{Binding MaxPracticeCount}" FontSize="24" FontAttributes="Bold" TextColor="#0F172A" />
-                        </VerticalStackLayout>
-                    </Frame>
-                    <Frame Grid.Column="2" Padding="12" BorderColor="#D1FAE5" BackgroundColor="#F0FDFA" HasShadow="False">
-                        <VerticalStackLayout Spacing="4">
-                            <Label Text="오답 수" FontSize="12" TextColor="#0F766E" />
-                            <Label Text="{Binding WrongQuestionCount}" FontSize="24" FontAttributes="Bold" TextColor="#0F766E" />
-                        </VerticalStackLayout>
-                    </Frame>
-                </Grid>
-
-                <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="10" RowSpacing="10">
-                    <Grid.Triggers>
-                        <DataTrigger TargetType="Grid" Binding="{Binding UseWideWorkspaceLayout}" Value="True">
-                            <Setter Property="IsVisible" Value="False" />
-                        </DataTrigger>
-                    </Grid.Triggers>
-                    <Frame Grid.Row="0" Grid.Column="0" Padding="12" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
-                        <VerticalStackLayout Spacing="4">
-                            <Label Text="현재 카테고리 문항" FontSize="12" TextColor="#64748B" />
-                            <Label Text="{Binding SelectedCategoryQuestionCountText}" FontSize="22" FontAttributes="Bold" TextColor="#0F172A" />
-                        </VerticalStackLayout>
-                    </Frame>
-                    <Frame Grid.Row="0" Grid.Column="1" Padding="12" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
-                        <VerticalStackLayout Spacing="4">
-                            <Label Text="연습 가능 최대" FontSize="12" TextColor="#64748B" />
-                            <Label Text="{Binding MaxPracticeCount}" FontSize="22" FontAttributes="Bold" TextColor="#0F172A" />
-                        </VerticalStackLayout>
-                    </Frame>
-                    <Frame Grid.Row="1" Grid.ColumnSpan="2" Padding="12" BorderColor="#D1FAE5" BackgroundColor="#F0FDFA" HasShadow="False">
-                        <VerticalStackLayout Spacing="4">
-                            <Label Text="오답 수" FontSize="12" TextColor="#0F766E" />
-                            <Label Text="{Binding WrongQuestionCount}" FontSize="22" FontAttributes="Bold" TextColor="#0F766E" />
-                        </VerticalStackLayout>
-                    </Frame>
-                </Grid>
-            </VerticalStackLayout>
+            </Grid>
         </Frame>
 
         <VerticalStackLayout Grid.Row="1" Spacing="12">
-            <Frame Padding="12" BorderColor="#FECACA" BackgroundColor="#FEF2F2" HasShadow="False" IsVisible="{Binding HasFeedback}">
-                <Label Text="{Binding Feedback}" TextColor="#B91C1C" LineBreakMode="WordWrap" />
+            <Frame Padding="12"
+                   BorderColor="#BFDBFE"
+                   BackgroundColor="#EFF6FF"
+                   HasShadow="False"
+                   IsVisible="{Binding IsInitializing}">
+                <HorizontalStackLayout Spacing="10">
+                    <ActivityIndicator IsRunning="{Binding IsInitializing}" Color="#0EA5E9" />
+                    <Label Text="앱 데이터와 저장된 문항을 불러오는 중입니다."
+                           VerticalTextAlignment="Center"
+                           TextColor="#1E3A8A" />
+                </HorizontalStackLayout>
+            </Frame>
+
+            <Frame Padding="12"
+                   BorderColor="{Binding FeedbackBorderColor}"
+                   BackgroundColor="{Binding FeedbackBackgroundColor}"
+                   HasShadow="False"
+                   IsVisible="{Binding HasFeedback}">
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="10">
+                    <Label Text="{Binding FeedbackTitle}"
+                           FontAttributes="Bold"
+                           TextColor="{Binding FeedbackTitleColor}"
+                           VerticalTextAlignment="Start" />
+                    <Label Grid.Column="1"
+                           Text="{Binding Feedback}"
+                           TextColor="#334155"
+                           LineBreakMode="WordWrap"
+                           MaxLines="5" />
+                    <Button Grid.Column="2"
+                            Text="닫기"
+                            Command="{Binding ClearFeedbackCommand}"
+                            Padding="10,4"
+                            MinimumHeightRequest="36"
+                            BackgroundColor="Transparent"
+                            BorderColor="Transparent"
+                            TextColor="#475569"
+                            SemanticProperties.Description="상태 메시지 닫기" />
+                </Grid>
             </Frame>
 
             <Frame Padding="8" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
                 <Grid ColumnDefinitions="*,*,*" ColumnSpacing="8">
-                    <Button Grid.Column="0" Text="작업" Command="{Binding ShowImportWorkspaceCommand}" CornerRadius="12" Padding="14,10" BackgroundColor="#E2E8F0" TextColor="#0F172A">
+                    <Button Grid.Column="0" Text="작업" Command="{Binding ShowImportWorkspaceCommand}" CornerRadius="12" Padding="14,10" BackgroundColor="#E2E8F0" TextColor="#0F172A" SemanticProperties.Description="카테고리와 PDF 가져오기 화면 열기">
                         <Button.Triggers>
                             <DataTrigger TargetType="Button" Binding="{Binding IsImportWorkspaceSelected}" Value="True">
                                 <Setter Property="BackgroundColor" Value="#0F172A" />
@@ -85,7 +145,7 @@
                             </DataTrigger>
                         </Button.Triggers>
                     </Button>
-                    <Button Grid.Column="1" Text="연습" Command="{Binding ShowPracticeWorkspaceCommand}" CornerRadius="12" Padding="14,10" BackgroundColor="#E2E8F0" TextColor="#0F172A">
+                    <Button Grid.Column="1" Text="연습" Command="{Binding ShowPracticeWorkspaceCommand}" CornerRadius="12" Padding="14,10" BackgroundColor="#E2E8F0" TextColor="#0F172A" SemanticProperties.Description="문제 연습 화면 열기">
                         <Button.Triggers>
                             <DataTrigger TargetType="Button" Binding="{Binding IsPracticeWorkspaceSelected}" Value="True">
                                 <Setter Property="BackgroundColor" Value="#0F172A" />
@@ -93,7 +153,7 @@
                             </DataTrigger>
                         </Button.Triggers>
                     </Button>
-                    <Button Grid.Column="2" Text="오답" Command="{Binding ShowWrongWorkspaceCommand}" CornerRadius="12" Padding="14,10" BackgroundColor="#E2E8F0" TextColor="#0F172A">
+                    <Button Grid.Column="2" Text="오답" Command="{Binding ShowWrongWorkspaceCommand}" CornerRadius="12" Padding="14,10" BackgroundColor="#E2E8F0" TextColor="#0F172A" SemanticProperties.Description="오답 노트 화면 열기">
                         <Button.Triggers>
                             <DataTrigger TargetType="Button" Binding="{Binding IsWrongWorkspaceSelected}" Value="True">
                                 <Setter Property="BackgroundColor" Value="#0F172A" />
@@ -116,12 +176,37 @@
                                         <Label Text="카테고리 관리" FontAttributes="Bold" FontSize="20" TextColor="#0F172A" />
                                         <Label Text="문항 반영 전에 카테고리를 고르고 유지합니다." TextColor="#64748B" FontSize="12" />
                                     </VerticalStackLayout>
-                                    <Entry Placeholder="새 카테고리 이름" Text="{Binding NewCategoryName}" ClearButtonVisibility="WhileEditing" />
+                                    <Entry Placeholder="새 카테고리 이름"
+                                           Text="{Binding NewCategoryName}"
+                                           IsEnabled="{Binding CanModifyQuestionStructure}"
+                                           ClearButtonVisibility="WhileEditing"
+                                           MaxLength="60"
+                                           ReturnType="Done"
+                                           SemanticProperties.Description="새 카테고리 이름 입력" />
                                     <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                                         <Button Grid.Column="0" Text="카테고리 추가" Command="{Binding AddCategoryCommand}" IsEnabled="{Binding CanAddCategory}" />
-                                        <Button Grid.Column="1" Text="현재 카테고리 삭제" Command="{Binding DeleteCategoryCommand}" IsEnabled="{Binding CanDeleteCategory}" />
+                                        <Button Grid.Column="1"
+                                                Text="현재 카테고리 삭제"
+                                                Command="{Binding DeleteCategoryCommand}"
+                                                IsEnabled="{Binding CanDeleteCategory}"
+                                                BackgroundColor="#FEF2F2"
+                                                TextColor="#B91C1C" />
                                     </Grid>
-                                    <Picker Title="카테고리 선택" ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}" ItemDisplayBinding="{Binding Name}" />
+                                    <Picker Title="카테고리 선택"
+                                            ItemsSource="{Binding Categories}"
+                                            SelectedItem="{Binding SelectedCategory}"
+                                            IsEnabled="{Binding CanModifyQuestionStructure}">
+                                        <Picker.ItemDisplayBinding>
+                                            <Binding Path="Name" x:DataType="models:Category" />
+                                        </Picker.ItemDisplayBinding>
+                                    </Picker>
+                                    <HorizontalStackLayout Spacing="8" IsVisible="{Binding IsSelectedCategoryLoading}">
+                                        <ActivityIndicator IsRunning="{Binding IsSelectedCategoryLoading}" Color="#0EA5E9" />
+                                        <Label Text="선택한 카테고리의 문항을 불러오는 중입니다."
+                                               FontSize="12"
+                                               TextColor="#475569"
+                                               VerticalTextAlignment="Center" />
+                                    </HorizontalStackLayout>
                                 </VerticalStackLayout>
                             </Frame>
 
@@ -136,43 +221,104 @@
                                         <Picker Grid.Column="0"
                                                 Title="문항 파일 선택"
                                                 ItemsSource="{Binding SourceFilesDirectory}"
-                                                SelectedItem="{Binding SelectedSourceFileName}" />
-                                        <Button Grid.Column="1" Text="새로고침" Command="{Binding LoadSourceFilesFromDirectoryCommand}" />
+                                                SelectedItem="{Binding SelectedSourceFileName}"
+                                                IsEnabled="{Binding CanModifyQuestionStructure}" />
+                                        <Button Grid.Column="1"
+                                                Text="새로고침"
+                                                Command="{Binding LoadSourceFilesFromDirectoryCommand}"
+                                                IsEnabled="{Binding CanModifyQuestionStructure}" />
                                     </Grid>
 
-                                    <Button Text="문항 PDF 추가" Command="{Binding ImportSourceFileCommand}" />
+                                    <Button Text="문항 PDF 추가"
+                                            Command="{Binding ImportSourceFileCommand}"
+                                            IsEnabled="{Binding CanModifyQuestionStructure}"
+                                            SemanticProperties.Description="기기에서 PDF 파일을 골라 앱에 복사" />
+
+                                    <HorizontalStackLayout Spacing="8"
+                                                           IsVisible="{Binding IsSourceFileImportInProgress}"
+                                                           SemanticProperties.Description="문항 PDF를 안전하게 복사하는 중">
+                                        <ActivityIndicator IsRunning="{Binding IsSourceFileImportInProgress}"
+                                                           Color="#0EA5E9" />
+                                        <Label Text="PDF를 안전하게 복사하는 중입니다."
+                                               VerticalTextAlignment="Center"
+                                               TextColor="#475569" />
+                                    </HorizontalStackLayout>
 
                                     <VerticalStackLayout Spacing="6">
                                         <Label Text="예상 문항 수 또는 범위" FontAttributes="Bold" />
-                                        <Entry Placeholder="예: 25 또는 31-55" Text="{Binding ExpectedQuestionRangeText}" />
+                                        <Entry Placeholder="예: 25 또는 31-55"
+                                               Text="{Binding ExpectedQuestionRangeText}"
+                                               IsEnabled="{Binding CanModifyQuestionStructure}"
+                                               MaxLength="11"
+                                               SemanticProperties.Description="예상 문항 개수 또는 시작-끝 번호 입력" />
                                         <Label Text="숫자만 입력하면 시작 번호를 자동 추정합니다." FontSize="12" TextColor="#64748B" />
                                     </VerticalStackLayout>
 
                                     <VerticalStackLayout Spacing="6">
                                         <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                             <Label Text="정답 맵" FontAttributes="Bold" VerticalTextAlignment="Center" />
-                                            <Button Grid.Column="1" Text="정답 파일 불러오기" Command="{Binding LoadAnswerFileCommand}" />
+                                            <Button Grid.Column="1"
+                                                    Text="정답 파일 불러오기"
+                                                    Command="{Binding LoadAnswerFileCommand}"
+                                                    IsEnabled="{Binding CanModifyQuestionStructure}" />
                                         </Grid>
-                                        <Editor HeightRequest="200" Placeholder="예: 1:3|4, 2:정답" Text="{Binding AnswerMapText}" />
+                                        <Editor HeightRequest="200"
+                                                Placeholder="예: 1:3|4, 2:정답"
+                                                Text="{Binding AnswerMapText}"
+                                                IsEnabled="{Binding CanModifyQuestionStructure}"
+                                                SemanticProperties.Description="문항 번호와 정답을 입력하거나 정답 파일을 불러오기" />
                                     </VerticalStackLayout>
 
                                     <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                        <Switch IsToggled="{Binding OverwriteExisting}" />
+                                        <Switch IsToggled="{Binding OverwriteExisting}"
+                                                IsEnabled="{Binding CanModifyQuestionStructure}"
+                                                SemanticProperties.Description="동일 파일명 문항 덮어쓰기" />
                                         <Label Grid.Column="1" Text="동일 파일명 문항이 있으면 확인 후 덮어씁니다." VerticalTextAlignment="Center" TextColor="#475569" />
                                     </Grid>
 
-                                    <Frame Padding="12" BorderColor="#BFDBFE" BackgroundColor="#EFF6FF" HasShadow="False" IsVisible="{Binding HasPdfAnalysisSummary}">
+                                    <Frame Padding="10" BorderColor="#FBBF24" BackgroundColor="#FFFBEB" HasShadow="False" IsVisible="{Binding ShowPdfAnalysisUnsupportedNotice}">
+                                        <Label Text="현재 iOS에서는 PDF OCR 분석을 지원하지 않습니다. 다른 지원 플랫폼에서 문항을 먼저 반영해 주세요."
+                                               TextColor="#92400E"
+                                               LineBreakMode="WordWrap" />
+                                    </Frame>
+
+                                    <Frame Padding="12" BorderColor="#BFDBFE" BackgroundColor="#EFF6FF" HasShadow="False" IsVisible="{Binding ShowPdfAnalysisPanel}">
                                         <VerticalStackLayout Spacing="8">
-                                            <Label Text="분석 상태" FontAttributes="Bold" TextColor="#1D4ED8" />
+                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                <Label Text="분석 상태" FontAttributes="Bold" TextColor="#1D4ED8" />
+                                                <ActivityIndicator Grid.Column="1"
+                                                                   IsRunning="{Binding IsPdfAnalysisInProgress}"
+                                                                   IsVisible="{Binding IsPdfAnalysisInProgress}"
+                                                                   Color="#0EA5E9"
+                                                                   SemanticProperties.Description="PDF 분석 진행 중" />
+                                            </Grid>
                                             <Label Text="{Binding PdfAnalysisSummary}" TextColor="#1E293B" LineBreakMode="WordWrap" />
                                             <VerticalStackLayout Spacing="4" IsVisible="{Binding ShowPdfAnalysisProgress}">
-                                                <Label Text="{Binding PdfAnalysisStatus}" TextColor="{Binding PdfAnalysisStatusColor}" LineBreakMode="WordWrap" />
+                                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                    <Label Text="{Binding PdfAnalysisStatus}" TextColor="{Binding PdfAnalysisStatusColor}" LineBreakMode="WordWrap" VerticalTextAlignment="Center" />
+                                                    <Button Grid.Column="1"
+                                                            Text="분석 취소"
+                                                            Command="{Binding CancelPdfAnalysisCommand}"
+                                                            IsVisible="{Binding IsPdfAnalysisInProgress}"
+                                                            IsEnabled="{Binding CanCancelPdfAnalysis}"
+                                                            BackgroundColor="#FFF7ED"
+                                                            TextColor="#C2410C"
+                                                            SemanticProperties.Description="진행 중인 PDF 문항 분석 취소" />
+                                                </Grid>
                                                 <ProgressBar Progress="{Binding PdfAnalysisProgressValue}" ProgressColor="#0EA5E9" />
                                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                                     <Label Text="{Binding PdfAnalysisProgressText}" TextColor="#475569" FontSize="12" />
                                                     <Label Grid.Column="1" Text="{Binding PdfAnalysisSpeedText}" TextColor="#475569" FontSize="12" />
                                                 </Grid>
                                             </VerticalStackLayout>
+                                            <Button Text="최근 분석 진단 보기"
+                                                    Clicked="OnOpenLatestDiagnosticsClicked"
+                                                    IsVisible="{Binding HasLatestPdfDiagnostics}"
+                                                    IsEnabled="{Binding HasLatestPdfDiagnostics}"
+                                                    BackgroundColor="#FFFFFF"
+                                                    TextColor="#1D4ED8"
+                                                    BorderColor="#93C5FD"
+                                                    SemanticProperties.Description="저장 여부와 관계없이 최근 PDF 구조 분석 진단 열기" />
                                         </VerticalStackLayout>
                                     </Frame>
 
@@ -207,7 +353,13 @@
                                                     </VerticalStackLayout>
                                                     <HorizontalStackLayout Spacing="8">
                                                         <Button Text="보기" Clicked="OnOpenSourceFileReviewClicked" CommandParameter="{Binding}" />
-                                                        <Button Text="삭제" Command="{Binding Source={x:Reference Root}, Path=BindingContext.DeleteSourceFileCommand}" CommandParameter="{Binding}" />
+                                                        <Button Text="삭제"
+                                                                Clicked="OnDeleteSourceFileClicked"
+                                                                CommandParameter="{Binding}"
+                                                                IsEnabled="{Binding CanDelete}"
+                                                                BackgroundColor="#FEF2F2"
+                                                                TextColor="#B91C1C"
+                                                                SemanticProperties.Description="이 파일에 저장된 문항 삭제" />
                                                     </HorizontalStackLayout>
                                                 </VerticalStackLayout>
                                             </Frame>
@@ -231,10 +383,34 @@
                                     <Label Text="카테고리 관리" FontAttributes="Bold" FontSize="20" TextColor="#0F172A" />
                                     <Label Text="문항 반영 전에 카테고리를 고르고 유지합니다." TextColor="#64748B" FontSize="12" />
                                 </VerticalStackLayout>
-                                <Entry Placeholder="새 카테고리 이름" Text="{Binding NewCategoryName}" ClearButtonVisibility="WhileEditing" />
+                                <Entry Placeholder="새 카테고리 이름"
+                                       Text="{Binding NewCategoryName}"
+                                       IsEnabled="{Binding CanModifyQuestionStructure}"
+                                       ClearButtonVisibility="WhileEditing"
+                                       MaxLength="60"
+                                       ReturnType="Done"
+                                       SemanticProperties.Description="새 카테고리 이름 입력" />
                                 <Button Text="카테고리 추가" Command="{Binding AddCategoryCommand}" IsEnabled="{Binding CanAddCategory}" />
-                                <Button Text="현재 카테고리 삭제" Command="{Binding DeleteCategoryCommand}" IsEnabled="{Binding CanDeleteCategory}" />
-                                <Picker Title="카테고리 선택" ItemsSource="{Binding Categories}" SelectedItem="{Binding SelectedCategory}" ItemDisplayBinding="{Binding Name}" />
+                                <Button Text="현재 카테고리 삭제"
+                                        Command="{Binding DeleteCategoryCommand}"
+                                        IsEnabled="{Binding CanDeleteCategory}"
+                                        BackgroundColor="#FEF2F2"
+                                        TextColor="#B91C1C" />
+                                <Picker Title="카테고리 선택"
+                                        ItemsSource="{Binding Categories}"
+                                        SelectedItem="{Binding SelectedCategory}"
+                                        IsEnabled="{Binding CanModifyQuestionStructure}">
+                                    <Picker.ItemDisplayBinding>
+                                        <Binding Path="Name" x:DataType="models:Category" />
+                                    </Picker.ItemDisplayBinding>
+                                </Picker>
+                                <HorizontalStackLayout Spacing="8" IsVisible="{Binding IsSelectedCategoryLoading}">
+                                    <ActivityIndicator IsRunning="{Binding IsSelectedCategoryLoading}" Color="#0EA5E9" />
+                                    <Label Text="선택한 카테고리의 문항을 불러오는 중입니다."
+                                           FontSize="12"
+                                           TextColor="#475569"
+                                           VerticalTextAlignment="Center" />
+                                </HorizontalStackLayout>
                             </VerticalStackLayout>
                         </Frame>
 
@@ -247,41 +423,103 @@
 
                                 <Picker Title="문항 파일 선택"
                                         ItemsSource="{Binding SourceFilesDirectory}"
-                                        SelectedItem="{Binding SelectedSourceFileName}" />
+                                        SelectedItem="{Binding SelectedSourceFileName}"
+                                        IsEnabled="{Binding CanModifyQuestionStructure}" />
                                 <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
-                                    <Button Grid.Column="0" Text="새로고침" Command="{Binding LoadSourceFilesFromDirectoryCommand}" />
-                                    <Button Grid.Column="1" Text="문항 PDF 추가" Command="{Binding ImportSourceFileCommand}" />
+                                    <Button Grid.Column="0"
+                                            Text="새로고침"
+                                            Command="{Binding LoadSourceFilesFromDirectoryCommand}"
+                                            IsEnabled="{Binding CanModifyQuestionStructure}" />
+                                    <Button Grid.Column="1"
+                                            Text="문항 PDF 추가"
+                                            Command="{Binding ImportSourceFileCommand}"
+                                            IsEnabled="{Binding CanModifyQuestionStructure}"
+                                            SemanticProperties.Description="기기에서 PDF 파일을 골라 앱에 복사" />
                                 </Grid>
+
+                                <HorizontalStackLayout Spacing="8"
+                                                       IsVisible="{Binding IsSourceFileImportInProgress}"
+                                                       SemanticProperties.Description="문항 PDF를 안전하게 복사하는 중">
+                                    <ActivityIndicator IsRunning="{Binding IsSourceFileImportInProgress}"
+                                                       Color="#0EA5E9" />
+                                    <Label Text="PDF를 안전하게 복사하는 중입니다."
+                                           VerticalTextAlignment="Center"
+                                           TextColor="#475569" />
+                                </HorizontalStackLayout>
 
                                 <VerticalStackLayout Spacing="6">
                                     <Label Text="예상 문항 수 또는 범위" FontAttributes="Bold" />
-                                    <Entry Placeholder="예: 25 또는 31-55" Text="{Binding ExpectedQuestionRangeText}" />
+                                    <Entry Placeholder="예: 25 또는 31-55"
+                                           Text="{Binding ExpectedQuestionRangeText}"
+                                           IsEnabled="{Binding CanModifyQuestionStructure}"
+                                           MaxLength="11"
+                                           SemanticProperties.Description="예상 문항 개수 또는 시작-끝 번호 입력" />
                                     <Label Text="숫자만 입력하면 시작 번호를 자동 추정합니다." FontSize="12" TextColor="#64748B" />
                                 </VerticalStackLayout>
 
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                     <Label Text="정답 맵" FontAttributes="Bold" VerticalTextAlignment="Center" />
-                                    <Button Grid.Column="1" Text="정답 파일 불러오기" Command="{Binding LoadAnswerFileCommand}" />
+                                    <Button Grid.Column="1"
+                                            Text="정답 파일 불러오기"
+                                            Command="{Binding LoadAnswerFileCommand}"
+                                            IsEnabled="{Binding CanModifyQuestionStructure}" />
                                 </Grid>
-                                <Editor HeightRequest="180" Placeholder="예: 1:3|4, 2:정답" Text="{Binding AnswerMapText}" />
+                                <Editor HeightRequest="180"
+                                        Placeholder="예: 1:3|4, 2:정답"
+                                        Text="{Binding AnswerMapText}"
+                                        IsEnabled="{Binding CanModifyQuestionStructure}"
+                                        SemanticProperties.Description="문항 번호와 정답을 입력하거나 정답 파일을 불러오기" />
 
                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                    <Switch IsToggled="{Binding OverwriteExisting}" />
+                                    <Switch IsToggled="{Binding OverwriteExisting}"
+                                            IsEnabled="{Binding CanModifyQuestionStructure}"
+                                            SemanticProperties.Description="동일 파일명 문항 덮어쓰기" />
                                     <Label Grid.Column="1" Text="동일 파일명 문항이 있으면 확인 후 덮어씁니다." VerticalTextAlignment="Center" TextColor="#475569" />
                                 </Grid>
 
-                                <Frame Padding="12" BorderColor="#BFDBFE" BackgroundColor="#EFF6FF" HasShadow="False" IsVisible="{Binding HasPdfAnalysisSummary}">
+                                <Frame Padding="10" BorderColor="#FBBF24" BackgroundColor="#FFFBEB" HasShadow="False" IsVisible="{Binding ShowPdfAnalysisUnsupportedNotice}">
+                                    <Label Text="현재 iOS에서는 PDF OCR 분석을 지원하지 않습니다. 다른 지원 플랫폼에서 문항을 먼저 반영해 주세요."
+                                           TextColor="#92400E"
+                                           LineBreakMode="WordWrap" />
+                                </Frame>
+
+                                <Frame Padding="12" BorderColor="#BFDBFE" BackgroundColor="#EFF6FF" HasShadow="False" IsVisible="{Binding ShowPdfAnalysisPanel}">
                                     <VerticalStackLayout Spacing="8">
-                                        <Label Text="분석 상태" FontAttributes="Bold" TextColor="#1D4ED8" />
+                                        <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                            <Label Text="분석 상태" FontAttributes="Bold" TextColor="#1D4ED8" />
+                                            <ActivityIndicator Grid.Column="1"
+                                                               IsRunning="{Binding IsPdfAnalysisInProgress}"
+                                                               IsVisible="{Binding IsPdfAnalysisInProgress}"
+                                                               Color="#0EA5E9"
+                                                               SemanticProperties.Description="PDF 분석 진행 중" />
+                                        </Grid>
                                         <Label Text="{Binding PdfAnalysisSummary}" TextColor="#1E293B" LineBreakMode="WordWrap" />
                                         <VerticalStackLayout Spacing="4" IsVisible="{Binding ShowPdfAnalysisProgress}">
-                                            <Label Text="{Binding PdfAnalysisStatus}" TextColor="{Binding PdfAnalysisStatusColor}" LineBreakMode="WordWrap" />
+                                            <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                                                <Label Text="{Binding PdfAnalysisStatus}" TextColor="{Binding PdfAnalysisStatusColor}" LineBreakMode="WordWrap" VerticalTextAlignment="Center" />
+                                                <Button Grid.Column="1"
+                                                        Text="분석 취소"
+                                                        Command="{Binding CancelPdfAnalysisCommand}"
+                                                        IsVisible="{Binding IsPdfAnalysisInProgress}"
+                                                        IsEnabled="{Binding CanCancelPdfAnalysis}"
+                                                        BackgroundColor="#FFF7ED"
+                                                        TextColor="#C2410C"
+                                                        SemanticProperties.Description="진행 중인 PDF 문항 분석 취소" />
+                                            </Grid>
                                             <ProgressBar Progress="{Binding PdfAnalysisProgressValue}" ProgressColor="#0EA5E9" />
                                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
                                                 <Label Text="{Binding PdfAnalysisProgressText}" TextColor="#475569" FontSize="12" />
                                                 <Label Grid.Column="1" Text="{Binding PdfAnalysisSpeedText}" TextColor="#475569" FontSize="12" />
                                             </Grid>
                                         </VerticalStackLayout>
+                                        <Button Text="최근 분석 진단 보기"
+                                                Clicked="OnOpenLatestDiagnosticsClicked"
+                                                IsVisible="{Binding HasLatestPdfDiagnostics}"
+                                                IsEnabled="{Binding HasLatestPdfDiagnostics}"
+                                                BackgroundColor="#FFFFFF"
+                                                TextColor="#1D4ED8"
+                                                BorderColor="#93C5FD"
+                                                SemanticProperties.Description="저장 여부와 관계없이 최근 PDF 구조 분석 진단 열기" />
                                     </VerticalStackLayout>
                                 </Frame>
 
@@ -315,7 +553,13 @@
                                                     </VerticalStackLayout>
                                                     <HorizontalStackLayout Spacing="8">
                                                         <Button Text="보기" Clicked="OnOpenSourceFileReviewClicked" CommandParameter="{Binding}" />
-                                                        <Button Text="삭제" Command="{Binding Source={x:Reference Root}, Path=BindingContext.DeleteSourceFileCommand}" CommandParameter="{Binding}" />
+                                                        <Button Text="삭제"
+                                                                Clicked="OnDeleteSourceFileClicked"
+                                                                CommandParameter="{Binding}"
+                                                                IsEnabled="{Binding CanDelete}"
+                                                                BackgroundColor="#FEF2F2"
+                                                                TextColor="#B91C1C"
+                                                                SemanticProperties.Description="이 파일에 저장된 문항 삭제" />
                                                     </HorizontalStackLayout>
                                                 </VerticalStackLayout>
                                             </Frame>
@@ -328,7 +572,11 @@
                 </VerticalStackLayout>
             </ScrollView>
 
-            <ScrollView IsVisible="{Binding ShowPracticeWorkspace}">
+            <ScrollView x:Name="PracticeWorkspaceScroll"
+                        IsVisible="{Binding ShowPracticeWorkspace}"
+                        Orientation="Both"
+                        HorizontalScrollBarVisibility="Default"
+                        VerticalScrollBarVisibility="Default">
                 <VerticalStackLayout Spacing="16">
                     <Grid IsVisible="{Binding UseWideWorkspaceLayout}" ColumnDefinitions="320,*" ColumnSpacing="16">
                         <Frame Padding="16" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
@@ -338,14 +586,22 @@
                                     <Label Text="문항 수를 정하고 바로 연습을 시작합니다." TextColor="#64748B" FontSize="12" />
                                 </VerticalStackLayout>
 
-                                <Entry Placeholder="문항 수" Keyboard="Numeric" Text="{Binding PracticeCountText}" />
+                                <Entry Placeholder="문항 수"
+                                       Keyboard="Numeric"
+                                       Text="{Binding PracticeCountText}"
+                                       IsEnabled="{Binding CanModifyQuestionStructure}"
+                                       MaxLength="4"
+                                       ReturnType="Done"
+                                       SemanticProperties.Description="이번 연습에서 풀 문항 수" />
                                 <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                                     <Button Grid.Column="0" Text="연습 시작" Command="{Binding StartPracticeCommand}" IsEnabled="{Binding CanStartPractice}" BackgroundColor="#0F172A" TextColor="#FFFFFF" />
                                     <Button Grid.Column="1" Text="오답 연습" Command="{Binding StartWrongPracticeCommand}" IsEnabled="{Binding CanStartWrongPractice}" />
                                 </Grid>
 
                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                    <CheckBox IsChecked="{Binding IncludeUnansweredInPractice}" />
+                                    <CheckBox IsChecked="{Binding IncludeUnansweredInPractice}"
+                                              IsEnabled="{Binding CanModifyQuestionStructure}"
+                                              SemanticProperties.Description="정답 없는 문항도 연습에 포함" />
                                     <Label Grid.Column="1" Text="정답 없는 문항도 연습에 포함" VerticalTextAlignment="Center" TextColor="#475569" />
                                 </Grid>
 
@@ -368,42 +624,106 @@
                         <Frame Grid.Column="1" Padding="16" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
                             <Grid>
                                 <VerticalStackLayout Spacing="12" IsVisible="{Binding IsPracticeRunning}">
-                                    <VerticalStackLayout Spacing="4">
-                                        <Label Text="현재 문제" FontAttributes="Bold" FontSize="20" TextColor="#0F172A" />
-                                        <Label Text="{Binding ProgressDisplay}" TextColor="#0F766E" FontAttributes="Bold" />
-                                        <Label Text="{Binding CurrentQuestionSourceDisplay}" FontSize="12" TextColor="#64748B" />
-                                    </VerticalStackLayout>
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                        <VerticalStackLayout Spacing="4">
+                                            <Label Text="현재 문제" FontAttributes="Bold" FontSize="20" TextColor="#0F172A" />
+                                            <Label Text="{Binding ProgressDisplay}" TextColor="#0F766E" FontAttributes="Bold" />
+                                            <Label Text="{Binding CurrentQuestionSourceDisplay}" FontSize="12" TextColor="#64748B" />
+                                        </VerticalStackLayout>
+                                        <Button Grid.Column="1"
+                                                Text="연습 종료"
+                                                Command="{Binding StopPracticeCommand}"
+                                                IsEnabled="{Binding CanStopPractice}"
+                                                BackgroundColor="#FFF7ED"
+                                                TextColor="#C2410C"
+                                                SemanticProperties.Description="현재 연습을 중간에 종료" />
+                                    </Grid>
 
                                     <Label Text="{Binding CurrentQuestionText}" FontAttributes="Bold" FontSize="18" IsVisible="{Binding ShowCurrentQuestionText}" />
 
-                                    <VerticalStackLayout Spacing="10"
-                                                        IsVisible="{Binding HasCurrentQuestionImages}"
-                                                        BindableLayout.ItemsSource="{Binding CurrentQuestionImageSlices}">
-                                        <BindableLayout.ItemTemplate>
-                                            <DataTemplate x:DataType="viewModels:QuestionImageSliceViewModel">
-                                                <Grid WidthRequest="{Binding VisibleWidth}"
-                                                      HeightRequest="{Binding VisibleHeight}"
-                                                      IsClippedToBounds="True"
-                                                      HorizontalOptions="Center">
-                                                    <Image Source="{Binding ImageSource}"
-                                                           WidthRequest="{Binding ContentWidth}"
-                                                           HeightRequest="{Binding ContentHeight}"
-                                                           TranslationX="{Binding TranslationX}"
-                                                           TranslationY="{Binding TranslationY}"
-                                                           HorizontalOptions="Start"
-                                                           VerticalOptions="Start"
-                                                           Aspect="AspectFit" />
-                                                </Grid>
-                                            </DataTemplate>
-                                        </BindableLayout.ItemTemplate>
+                                    <VerticalStackLayout Spacing="8"
+                                                         IsVisible="{Binding HasCurrentQuestionImages}"
+                                                         SemanticProperties.Description="{Binding CurrentQuestionSemanticDescription}">
+                                        <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+                                            <Button Text="-" WidthRequest="44" HeightRequest="44" Padding="0" Command="{Binding DecreaseQuestionImageZoomCommand}" IsEnabled="{Binding CanDecreaseQuestionImageZoom}" SemanticProperties.Description="문제 이미지 축소" />
+                                            <Button Grid.Column="1" Text="100%" HeightRequest="44" Padding="10,0" Command="{Binding ResetQuestionImageZoomCommand}" IsEnabled="{Binding CanResetQuestionImageZoom}" SemanticProperties.Description="문제 이미지 원래 크기로 초기화" />
+                                            <Label Grid.Column="2" Text="{Binding QuestionImageZoomText}" HorizontalTextAlignment="Center" VerticalTextAlignment="Center" TextColor="#475569" />
+                                            <Button Grid.Column="3" Text="+" WidthRequest="44" HeightRequest="44" Padding="0" Command="{Binding IncreaseQuestionImageZoomCommand}" IsEnabled="{Binding CanIncreaseQuestionImageZoom}" SemanticProperties.Description="문제 이미지 확대" />
+                                        </Grid>
+                                        <VerticalStackLayout x:Name="WidePracticeImageContent">
+                                            <VerticalStackLayout.GestureRecognizers>
+                                                <PinchGestureRecognizer PinchUpdated="OnQuestionImagePinchUpdated" />
+                                            </VerticalStackLayout.GestureRecognizers>
+                                            <VerticalStackLayout Spacing="10"
+                                                                Scale="{Binding QuestionImagePreviewScale}"
+                                                                AnchorX="0"
+                                                                AnchorY="0"
+                                                                BindableLayout.ItemsSource="{Binding CurrentQuestionImageSlices}">
+                                                <BindableLayout.ItemTemplate>
+                                                    <DataTemplate x:DataType="viewModels:QuestionImageSliceViewModel">
+                                                        <Grid WidthRequest="{Binding VisibleWidth}"
+                                                              HeightRequest="{Binding VisibleHeight}"
+                                                              IsClippedToBounds="True"
+                                                              HorizontalOptions="Start">
+                                                            <Image Source="{Binding ImageSource}"
+                                                                   WidthRequest="{Binding ContentWidth}"
+                                                                   HeightRequest="{Binding ContentHeight}"
+                                                                   TranslationX="{Binding TranslationX}"
+                                                                   TranslationY="{Binding TranslationY}"
+                                                                   HorizontalOptions="Start"
+                                                                   VerticalOptions="Start"
+                                                                   Aspect="AspectFit"
+                                                                   SemanticProperties.Description="{Binding AccessibilityDescription}" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </BindableLayout.ItemTemplate>
+                                            </VerticalStackLayout>
+                                        </VerticalStackLayout>
                                     </VerticalStackLayout>
+
+                                    <Frame Padding="10"
+                                           BorderColor="#FBBF24"
+                                           BackgroundColor="#FFFBEB"
+                                           HasShadow="False"
+                                           IsVisible="{Binding HasQuestionImageNotice}">
+                                        <Label Text="{Binding QuestionImageNotice}"
+                                               TextColor="#92400E"
+                                               LineBreakMode="WordWrap" />
+                                    </Frame>
 
                                     <Label Text="{Binding CurrentQuestionChoicesText}" IsVisible="{Binding ShowCurrentQuestionText}" />
 
-                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
-                                        <Entry Grid.Column="0" Placeholder="답 입력" Text="{Binding UserAnswer}" />
-                                        <Button Grid.Column="1" Text="채점" Command="{Binding SubmitAnswerCommand}" BackgroundColor="#0F172A" TextColor="#FFFFFF" />
+                                    <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8">
+                                        <Entry x:Name="WidePracticeAnswerEntry"
+                                               Grid.Column="0"
+                                               Placeholder="답 입력"
+                                               Text="{Binding UserAnswer}"
+                                               IsEnabled="{Binding CanEnterAnswer}"
+                                               ClearButtonVisibility="WhileEditing"
+                                               ReturnType="Done"
+                                               ReturnCommand="{Binding SubmitAnswerCommand}"
+                                               SemanticProperties.Description="현재 문제의 답 입력" />
+                                        <Button Grid.Column="1"
+                                                Text="{Binding SubmitAnswerButtonText}"
+                                                Command="{Binding SubmitAnswerCommand}"
+                                                IsEnabled="{Binding CanSubmitAnswer}"
+                                                BackgroundColor="#0F172A"
+                                                TextColor="#FFFFFF"
+                                                SemanticProperties.Description="입력한 답 채점" />
+                                        <Button Grid.Column="2"
+                                                Text="{Binding NextQuestionButtonText}"
+                                                Command="{Binding NextQuestionCommand}"
+                                                IsVisible="{Binding IsAnswerRevealed}"
+                                                IsEnabled="{Binding CanGoToNextQuestion}"
+                                                BackgroundColor="#0F766E"
+                                                TextColor="#FFFFFF"
+                                                SemanticProperties.Description="채점 결과를 확인하고 다음 단계로 이동" />
                                     </Grid>
+
+                                    <Label Text="{Binding UserAnswerValidationMessage}"
+                                           IsVisible="{Binding HasUserAnswerValidationError}"
+                                           TextColor="#B91C1C"
+                                           FontSize="12" />
 
                                     <Frame Padding="10" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
                                         <Label Text="{Binding SessionFeedback}" TextColor="#334155" LineBreakMode="WordWrap" />
@@ -418,6 +738,15 @@
                                     </VerticalStackLayout.Triggers>
                                     <Label Text="연습 대기 중" FontAttributes="Bold" FontSize="20" TextColor="#0F172A" />
                                     <Label Text="왼쪽에서 문항 수를 정한 뒤 연습을 시작하면 이 영역에 현재 문제가 크게 표시됩니다." TextColor="#64748B" LineBreakMode="WordWrap" />
+                                    <Frame Padding="12"
+                                           BorderColor="#99F6E4"
+                                           BackgroundColor="#F0FDFA"
+                                           HasShadow="False"
+                                           IsVisible="{Binding HasSessionFeedback}">
+                                        <Label Text="{Binding SessionFeedback}"
+                                               TextColor="#0F766E"
+                                               FontAttributes="Bold" />
+                                    </Frame>
                                 </VerticalStackLayout>
                             </Grid>
                         </Frame>
@@ -437,14 +766,22 @@
                                     <Label Text="모바일에서는 설정과 현재 문제를 위아래로 분리했습니다." TextColor="#64748B" FontSize="12" />
                                 </VerticalStackLayout>
 
-                                <Entry Placeholder="문항 수" Keyboard="Numeric" Text="{Binding PracticeCountText}" />
+                                <Entry Placeholder="문항 수"
+                                       Keyboard="Numeric"
+                                       Text="{Binding PracticeCountText}"
+                                       IsEnabled="{Binding CanModifyQuestionStructure}"
+                                       MaxLength="4"
+                                       ReturnType="Done"
+                                       SemanticProperties.Description="이번 연습에서 풀 문항 수" />
                                 <Grid ColumnDefinitions="*,*" ColumnSpacing="8">
                                     <Button Grid.Column="0" Text="연습 시작" Command="{Binding StartPracticeCommand}" IsEnabled="{Binding CanStartPractice}" BackgroundColor="#0F172A" TextColor="#FFFFFF" />
                                     <Button Grid.Column="1" Text="오답 연습" Command="{Binding StartWrongPracticeCommand}" IsEnabled="{Binding CanStartWrongPractice}" />
                                 </Grid>
 
                                 <Grid ColumnDefinitions="Auto,*" ColumnSpacing="8">
-                                    <CheckBox IsChecked="{Binding IncludeUnansweredInPractice}" />
+                                    <CheckBox IsChecked="{Binding IncludeUnansweredInPractice}"
+                                              IsEnabled="{Binding CanModifyQuestionStructure}"
+                                              SemanticProperties.Description="정답 없는 문항도 연습에 포함" />
                                     <Label Grid.Column="1" Text="정답 없는 문항도 연습에 포함" VerticalTextAlignment="Center" TextColor="#475569" />
                                 </Grid>
 
@@ -466,42 +803,104 @@
                         </Frame>
 
                         <Frame Padding="16" BorderColor="#CBD5E1" BackgroundColor="#FFFFFF" HasShadow="False">
-                            <Grid>
+                            <Grid x:Name="NarrowPracticeQuestionContent">
                                 <VerticalStackLayout Spacing="12" IsVisible="{Binding IsPracticeRunning}">
-                                    <VerticalStackLayout Spacing="4">
-                                        <Label Text="현재 문제" FontAttributes="Bold" FontSize="20" TextColor="#0F172A" />
-                                        <Label Text="{Binding ProgressDisplay}" TextColor="#0F766E" FontAttributes="Bold" />
-                                        <Label Text="{Binding CurrentQuestionSourceDisplay}" FontSize="12" TextColor="#64748B" />
-                                    </VerticalStackLayout>
+                                    <Grid ColumnDefinitions="*,Auto" ColumnSpacing="10">
+                                        <VerticalStackLayout Spacing="4">
+                                            <Label Text="현재 문제" FontAttributes="Bold" FontSize="20" TextColor="#0F172A" />
+                                            <Label Text="{Binding ProgressDisplay}" TextColor="#0F766E" FontAttributes="Bold" />
+                                            <Label Text="{Binding CurrentQuestionSourceDisplay}" FontSize="12" TextColor="#64748B" />
+                                        </VerticalStackLayout>
+                                        <Button Grid.Column="1"
+                                                Text="종료"
+                                                Command="{Binding StopPracticeCommand}"
+                                                IsEnabled="{Binding CanStopPractice}"
+                                                BackgroundColor="#FFF7ED"
+                                                TextColor="#C2410C"
+                                                SemanticProperties.Description="현재 연습을 중간에 종료" />
+                                    </Grid>
 
                                     <Label Text="{Binding CurrentQuestionText}" FontAttributes="Bold" FontSize="18" IsVisible="{Binding ShowCurrentQuestionText}" />
 
-                                    <VerticalStackLayout Spacing="10"
-                                                        IsVisible="{Binding HasCurrentQuestionImages}"
-                                                        BindableLayout.ItemsSource="{Binding CurrentQuestionImageSlices}">
-                                        <BindableLayout.ItemTemplate>
-                                            <DataTemplate x:DataType="viewModels:QuestionImageSliceViewModel">
-                                                <Grid WidthRequest="{Binding VisibleWidth}"
-                                                      HeightRequest="{Binding VisibleHeight}"
-                                                      IsClippedToBounds="True"
-                                                      HorizontalOptions="Center">
-                                                    <Image Source="{Binding ImageSource}"
-                                                           WidthRequest="{Binding ContentWidth}"
-                                                           HeightRequest="{Binding ContentHeight}"
-                                                           TranslationX="{Binding TranslationX}"
-                                                           TranslationY="{Binding TranslationY}"
-                                                           HorizontalOptions="Start"
-                                                           VerticalOptions="Start"
-                                                           Aspect="AspectFit" />
-                                                </Grid>
-                                            </DataTemplate>
-                                        </BindableLayout.ItemTemplate>
+                                    <VerticalStackLayout Spacing="8"
+                                                         IsVisible="{Binding HasCurrentQuestionImages}"
+                                                         SemanticProperties.Description="{Binding CurrentQuestionSemanticDescription}">
+                                        <Grid ColumnDefinitions="Auto,Auto,*,Auto" ColumnSpacing="8">
+                                            <Button Text="-" WidthRequest="44" HeightRequest="44" Padding="0" Command="{Binding DecreaseQuestionImageZoomCommand}" IsEnabled="{Binding CanDecreaseQuestionImageZoom}" SemanticProperties.Description="문제 이미지 축소" />
+                                            <Button Grid.Column="1" Text="100%" HeightRequest="44" Padding="10,0" Command="{Binding ResetQuestionImageZoomCommand}" IsEnabled="{Binding CanResetQuestionImageZoom}" SemanticProperties.Description="문제 이미지 원래 크기로 초기화" />
+                                            <Label Grid.Column="2" Text="{Binding QuestionImageZoomText}" HorizontalTextAlignment="Center" VerticalTextAlignment="Center" TextColor="#475569" />
+                                            <Button Grid.Column="3" Text="+" WidthRequest="44" HeightRequest="44" Padding="0" Command="{Binding IncreaseQuestionImageZoomCommand}" IsEnabled="{Binding CanIncreaseQuestionImageZoom}" SemanticProperties.Description="문제 이미지 확대" />
+                                        </Grid>
+                                        <VerticalStackLayout x:Name="NarrowPracticeImageContent">
+                                            <VerticalStackLayout.GestureRecognizers>
+                                                <PinchGestureRecognizer PinchUpdated="OnQuestionImagePinchUpdated" />
+                                            </VerticalStackLayout.GestureRecognizers>
+                                            <VerticalStackLayout Spacing="10"
+                                                                Scale="{Binding QuestionImagePreviewScale}"
+                                                                AnchorX="0"
+                                                                AnchorY="0"
+                                                                BindableLayout.ItemsSource="{Binding CurrentQuestionImageSlices}">
+                                                <BindableLayout.ItemTemplate>
+                                                    <DataTemplate x:DataType="viewModels:QuestionImageSliceViewModel">
+                                                        <Grid WidthRequest="{Binding VisibleWidth}"
+                                                              HeightRequest="{Binding VisibleHeight}"
+                                                              IsClippedToBounds="True"
+                                                              HorizontalOptions="Start">
+                                                            <Image Source="{Binding ImageSource}"
+                                                                   WidthRequest="{Binding ContentWidth}"
+                                                                   HeightRequest="{Binding ContentHeight}"
+                                                                   TranslationX="{Binding TranslationX}"
+                                                                   TranslationY="{Binding TranslationY}"
+                                                                   HorizontalOptions="Start"
+                                                                   VerticalOptions="Start"
+                                                                   Aspect="AspectFit"
+                                                                   SemanticProperties.Description="{Binding AccessibilityDescription}" />
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </BindableLayout.ItemTemplate>
+                                            </VerticalStackLayout>
+                                        </VerticalStackLayout>
                                     </VerticalStackLayout>
+
+                                    <Frame Padding="10"
+                                           BorderColor="#FBBF24"
+                                           BackgroundColor="#FFFBEB"
+                                           HasShadow="False"
+                                           IsVisible="{Binding HasQuestionImageNotice}">
+                                        <Label Text="{Binding QuestionImageNotice}"
+                                               TextColor="#92400E"
+                                               LineBreakMode="WordWrap" />
+                                    </Frame>
 
                                     <Label Text="{Binding CurrentQuestionChoicesText}" IsVisible="{Binding ShowCurrentQuestionText}" />
 
-                                    <Entry Placeholder="답 입력" Text="{Binding UserAnswer}" />
-                                    <Button Text="채점" Command="{Binding SubmitAnswerCommand}" BackgroundColor="#0F172A" TextColor="#FFFFFF" />
+                                    <Entry x:Name="NarrowPracticeAnswerEntry"
+                                           Placeholder="답 입력"
+                                           Text="{Binding UserAnswer}"
+                                           IsEnabled="{Binding CanEnterAnswer}"
+                                           ClearButtonVisibility="WhileEditing"
+                                           ReturnType="Done"
+                                           ReturnCommand="{Binding SubmitAnswerCommand}"
+                                           SemanticProperties.Description="현재 문제의 답 입력" />
+                                    <Button Text="{Binding SubmitAnswerButtonText}"
+                                            Command="{Binding SubmitAnswerCommand}"
+                                            IsEnabled="{Binding CanSubmitAnswer}"
+                                            BackgroundColor="#0F172A"
+                                            TextColor="#FFFFFF"
+                                            SemanticProperties.Description="입력한 답 채점" />
+
+                                    <Button Text="{Binding NextQuestionButtonText}"
+                                            Command="{Binding NextQuestionCommand}"
+                                            IsVisible="{Binding IsAnswerRevealed}"
+                                            IsEnabled="{Binding CanGoToNextQuestion}"
+                                            BackgroundColor="#0F766E"
+                                            TextColor="#FFFFFF"
+                                            SemanticProperties.Description="채점 결과를 확인하고 다음 단계로 이동" />
+
+                                    <Label Text="{Binding UserAnswerValidationMessage}"
+                                           IsVisible="{Binding HasUserAnswerValidationError}"
+                                           TextColor="#B91C1C"
+                                           FontSize="12" />
 
                                     <Frame Padding="10" BorderColor="#E2E8F0" BackgroundColor="#F8FAFC" HasShadow="False">
                                         <Label Text="{Binding SessionFeedback}" TextColor="#334155" LineBreakMode="WordWrap" />
@@ -516,6 +915,15 @@
                                     </VerticalStackLayout.Triggers>
                                     <Label Text="연습 대기 중" FontAttributes="Bold" FontSize="20" TextColor="#0F172A" />
                                     <Label Text="위에서 연습을 시작하면 이 영역에 문제 이미지와 답 입력창이 표시됩니다." TextColor="#64748B" LineBreakMode="WordWrap" />
+                                    <Frame Padding="12"
+                                           BorderColor="#99F6E4"
+                                           BackgroundColor="#F0FDFA"
+                                           HasShadow="False"
+                                           IsVisible="{Binding HasSessionFeedback}">
+                                        <Label Text="{Binding SessionFeedback}"
+                                               TextColor="#0F766E"
+                                               FontAttributes="Bold" />
+                                    </Frame>
                                 </VerticalStackLayout>
                             </Grid>
                         </Frame>
@@ -556,7 +964,7 @@
                                                 </VerticalStackLayout>
                                                 <Button Text="삭제"
                                                         HorizontalOptions="Start"
-                                                        Command="{Binding Source={x:Reference Root}, Path=BindingContext.RemoveWrongCommand}"
+                                                        Clicked="OnRemoveWrongClicked"
                                                         CommandParameter="{Binding Id}" />
                                             </VerticalStackLayout>
                                         </Frame>

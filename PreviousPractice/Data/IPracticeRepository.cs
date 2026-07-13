@@ -20,12 +20,13 @@ public interface IPracticeRepository
 
     Task<bool> RemoveQuestionsBySourceFileAsync(string categoryId, string sourceFileName);
 
-    Task SaveImportedQuestionsAsync(
+    Task<ImportedQuestionsSaveResult> SaveImportedQuestionsAsync(
         string categoryId,
         string sourceFileName,
         IEnumerable<Question> questions,
         bool overwriteBySourceFile,
-        bool updateExistingCorrectAnswers = false);
+        bool updateExistingCorrectAnswers = false,
+        IReadOnlyCollection<int>? answerIndexesToUpdate = null);
 
     Task<IReadOnlyList<Question>> GetWrongQuestionsAsync();
 

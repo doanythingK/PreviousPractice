@@ -7,7 +7,8 @@ public sealed record OcrLineResult
     double LeftRatio,
     double TopRatio,
     double RightRatio,
-    double BottomRatio
+    double BottomRatio,
+    bool HasReliableGeometry = true
 );
 
 public sealed record OcrPageResult

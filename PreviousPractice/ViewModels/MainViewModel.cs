@@ -35,35 +35,58 @@ public class MainViewModel : ViewModelBase
     private int pdfAnalysisProcessedPages;
     private double pdfAnalysisPagesPerSecond;
     private bool isPdfAnalysisInProgress;
+    private bool isPdfAnalysisCommitStarted;
+    private bool isSourceFileImportInProgress;
+    private bool isInitializing = true;
+    private bool isSelectedCategoryLoading;
+    private bool isStructuralOperationInProgress;
+    private int structuralOperationGate;
+    private CancellationTokenSource? pdfAnalysisCancellation;
     private DateTimeOffset pdfAnalysisStartAt;
     private string practiceCountText = "1";
     private string feedback = string.Empty;
     private string sessionFeedback = string.Empty;
     private string userAnswer = string.Empty;
     private string selectedWorkspaceSection = WorkspaceSectionImport;
+    private bool isTopSummaryExpanded;
+    private double questionImageZoom = 1d;
+    private double questionImagePreviewScale = 1d;
+    private double currentQuestionImageViewportWidth;
+    private double currentQuestionImageViewportHeight;
+    private string questionImageNotice = string.Empty;
+    private string latestPdfDiagnosticsText = string.Empty;
+    private string latestPdfDiagnosticsTitle = string.Empty;
+    private bool useWideWorkspaceLayout;
     private bool isPracticeRunning;
+    private bool isPracticeStartInProgress;
+    private bool isAnswerRevealed;
+    private bool isAnswerSubmissionInProgress;
     private bool overwriteExisting;
     private Category? selectedCategory;
     private Question? currentQuestion;
     private int sessionCount;
     private int currentIndex;
     private int correctCount;
+    private int gradedCount;
     private int selectedCategoryQuestionCount;
     private int selectedCategoryPracticeQuestionCount;
+    private int selectedCategoryRefreshVersion;
     private SourceFileSummary? selectedSourceFile;
     private bool includeUnansweredInPractice = true;
     private string selectedSourceFileName = string.Empty;
     private IReadOnlyList<Question> currentSession = Array.Empty<Question>();
-    private const double PhoneQuestionImageViewportWidth = 320d;
-    private const double PhoneQuestionImageViewportHeight = 260d;
-    private const double TabletQuestionImageViewportWidth = 560d;
-    private const double TabletQuestionImageViewportHeight = 440d;
-    private const double DesktopQuestionImageViewportWidth = 760d;
-    private const double DesktopQuestionImageViewportHeight = 620d;
     private const double MinQuestionImageSliceRatio = 0.02d;
     private const double MinQuestionImageSliceWidthRatio = 0.08d;
+    private const double MinQuestionImageZoom = 0.75d;
+    private const double MaxQuestionImageZoom = 3.5d;
+    private const double QuestionImageZoomStep = 0.25d;
+    private const double WideWorkspaceMinimumWidth = 1000d;
+    private const double WideWorkspaceHorizontalChrome = 404d;
+    private const double NarrowWorkspaceHorizontalChrome = 72d;
     private const double QuestionImageCropPaddingRatio = 0.015d;
     private const int MalformedSharedContextFallbackQuestionCount = 3;
+    private const int MaximumExpectedQuestionNumber = 999;
+    private const int MaximumExpectedQuestionCount = 999;
     private const string WorkspaceSectionImport = "import";
     private const string WorkspaceSectionPractice = "practice";
     private const string WorkspaceSectionWrong = "wrong";
@@ -103,6 +126,7 @@ public class MainViewModel : ViewModelBase
             if (SetProperty(ref pdfAnalysisSummary, value))
             {
                 OnPropertyChanged(nameof(HasPdfAnalysisSummary));
+                OnPropertyChanged(nameof(ShowPdfAnalysisPanel));
             }
         }
     }
@@ -126,9 +150,18 @@ public class MainViewModel : ViewModelBase
         {
             if (SetProperty(ref isPdfAnalysisInProgress, value))
             {
+                OnPropertyChanged(nameof(CanModifyQuestionStructure));
+                OnPropertyChanged(nameof(CanAddCategory));
                 OnPropertyChanged(nameof(CanImportAnswerMap));
                 OnPropertyChanged(nameof(CanStartPractice));
+                OnPropertyChanged(nameof(CanStartWrongPractice));
+                OnPropertyChanged(nameof(CanDeleteCategory));
+                OnPropertyChanged(nameof(CanDeleteSourceFile));
                 OnPropertyChanged(nameof(ShowPdfAnalysisProgress));
+                OnPropertyChanged(nameof(ShowPdfAnalysisPanel));
+                OnPropertyChanged(nameof(CanCancelPdfAnalysis));
+                CancelPdfAnalysisCommand.RaiseCanExecuteChanged();
+                UpdateSourceFileActionState();
             }
         }
     }
@@ -168,6 +201,68 @@ public class MainViewModel : ViewModelBase
 
     public bool ShowPdfAnalysisProgress => IsPdfAnalysisInProgress || pdfAnalysisProcessedPages > 0;
 
+    public bool ShowPdfAnalysisPanel => HasPdfAnalysisSummary || ShowPdfAnalysisProgress;
+
+    public bool CanCancelPdfAnalysis =>
+        IsPdfAnalysisInProgress &&
+        !isPdfAnalysisCommitStarted &&
+        pdfAnalysisCancellation is { IsCancellationRequested: false };
+
+    public bool IsSourceFileImportInProgress
+    {
+        get => isSourceFileImportInProgress;
+        private set
+        {
+            if (SetProperty(ref isSourceFileImportInProgress, value))
+            {
+                OnPropertyChanged(nameof(CanModifyQuestionStructure));
+                OnPropertyChanged(nameof(CanAddCategory));
+                OnPropertyChanged(nameof(CanImportAnswerMap));
+                OnPropertyChanged(nameof(CanStartPractice));
+                OnPropertyChanged(nameof(CanStartWrongPractice));
+                OnPropertyChanged(nameof(CanDeleteCategory));
+                OnPropertyChanged(nameof(CanDeleteSourceFile));
+                UpdateSourceFileActionState();
+            }
+        }
+    }
+
+    public bool IsStructuralOperationInProgress
+    {
+        get => isStructuralOperationInProgress;
+        private set
+        {
+            if (SetProperty(ref isStructuralOperationInProgress, value))
+            {
+                UpdatePracticeState();
+            }
+        }
+    }
+
+    public bool IsInitializing
+    {
+        get => isInitializing;
+        private set
+        {
+            if (SetProperty(ref isInitializing, value))
+            {
+                UpdatePracticeState();
+            }
+        }
+    }
+
+    public bool IsSelectedCategoryLoading
+    {
+        get => isSelectedCategoryLoading;
+        private set
+        {
+            if (SetProperty(ref isSelectedCategoryLoading, value))
+            {
+                UpdatePracticeState();
+            }
+        }
+    }
+
     public string NewCategoryName
     {
         get => newCategoryName;
@@ -194,8 +289,13 @@ public class MainViewModel : ViewModelBase
 
     public bool CanImportAnswerMap =>
         SelectedCategory != null &&
-        !IsPdfAnalysisInProgress &&
+        CanModifyQuestionStructure &&
+        IsPdfAnalysisSupported &&
         !string.IsNullOrWhiteSpace(SelectedSourceFileName);
+
+    public bool IsPdfAnalysisSupported => DeviceInfo.Platform != DevicePlatform.iOS;
+
+    public bool ShowPdfAnalysisUnsupportedNotice => !IsPdfAnalysisSupported;
 
     public string AnswerMapText
     {
@@ -235,11 +335,47 @@ public class MainViewModel : ViewModelBase
             if (SetProperty(ref feedback, value))
             {
                 OnPropertyChanged(nameof(HasFeedback));
+                OnPropertyChanged(nameof(FeedbackTitle));
+                OnPropertyChanged(nameof(FeedbackBackgroundColor));
+                OnPropertyChanged(nameof(FeedbackBorderColor));
+                OnPropertyChanged(nameof(FeedbackTitleColor));
             }
         }
     }
 
     public bool HasFeedback => !string.IsNullOrWhiteSpace(Feedback);
+
+    public string FeedbackTitle => ResolveFeedbackTone(Feedback) switch
+    {
+        FeedbackTone.Success => "완료",
+        FeedbackTone.Warning => "확인",
+        FeedbackTone.Error => "문제 발생",
+        _ => "상태"
+    };
+
+    public Color FeedbackBackgroundColor => ResolveFeedbackTone(Feedback) switch
+    {
+        FeedbackTone.Success => Color.FromArgb("#F0FDF4"),
+        FeedbackTone.Warning => Color.FromArgb("#FFF7ED"),
+        FeedbackTone.Error => Color.FromArgb("#FEF2F2"),
+        _ => Color.FromArgb("#F8FAFC")
+    };
+
+    public Color FeedbackBorderColor => ResolveFeedbackTone(Feedback) switch
+    {
+        FeedbackTone.Success => Color.FromArgb("#86EFAC"),
+        FeedbackTone.Warning => Color.FromArgb("#FDBA74"),
+        FeedbackTone.Error => Color.FromArgb("#FCA5A5"),
+        _ => Color.FromArgb("#CBD5E1")
+    };
+
+    public Color FeedbackTitleColor => ResolveFeedbackTone(Feedback) switch
+    {
+        FeedbackTone.Success => Color.FromArgb("#166534"),
+        FeedbackTone.Warning => Color.FromArgb("#C2410C"),
+        FeedbackTone.Error => Color.FromArgb("#B91C1C"),
+        _ => Color.FromArgb("#0F766E")
+    };
 
     public string SelectedWorkspaceSection
     {
@@ -270,22 +406,68 @@ public class MainViewModel : ViewModelBase
 
     public bool ShowWrongWorkspace => IsWrongWorkspaceSelected;
 
-    public bool UseWideWorkspaceLayout =>
-        DeviceInfo.Idiom == DeviceIdiom.Desktop ||
-        DeviceInfo.Idiom == DeviceIdiom.Tablet;
+    public bool UseWideWorkspaceLayout => useWideWorkspaceLayout;
+
+    public bool IsTopSummaryExpanded
+    {
+        get => isTopSummaryExpanded;
+        private set
+        {
+            if (SetProperty(ref isTopSummaryExpanded, value))
+            {
+                OnPropertyChanged(nameof(TopSummaryToggleText));
+            }
+        }
+    }
+
+    public string TopSummaryToggleText => IsTopSummaryExpanded ? "접기" : "펼치기";
 
     public bool HasPdfAnalysisSummary => !string.IsNullOrWhiteSpace(PdfAnalysisSummary);
+
+    public string LatestPdfDiagnosticsText
+    {
+        get => latestPdfDiagnosticsText;
+        private set
+        {
+            if (SetProperty(ref latestPdfDiagnosticsText, value))
+            {
+                OnPropertyChanged(nameof(HasLatestPdfDiagnostics));
+            }
+        }
+    }
+
+    public string LatestPdfDiagnosticsTitle
+    {
+        get => latestPdfDiagnosticsTitle;
+        private set => SetProperty(ref latestPdfDiagnosticsTitle, value);
+    }
+
+    public bool HasLatestPdfDiagnostics => !string.IsNullOrWhiteSpace(LatestPdfDiagnosticsText);
 
     public string SessionFeedback
     {
         get => sessionFeedback;
-        set => SetProperty(ref sessionFeedback, value);
+        set
+        {
+            if (SetProperty(ref sessionFeedback, value))
+            {
+                OnPropertyChanged(nameof(HasSessionFeedback));
+            }
+        }
     }
+
+    public bool HasSessionFeedback => !string.IsNullOrWhiteSpace(SessionFeedback);
 
     public string UserAnswer
     {
         get => userAnswer;
-        set => SetProperty(ref userAnswer, value);
+        set
+        {
+            if (SetProperty(ref userAnswer, value))
+            {
+                NotifyAnswerInputValidationState();
+            }
+        }
     }
 
     public bool IsPracticeRunning
@@ -295,9 +477,35 @@ public class MainViewModel : ViewModelBase
         {
             if (SetProperty(ref isPracticeRunning, value))
             {
+                OnPropertyChanged(nameof(CanModifyQuestionStructure));
+                OnPropertyChanged(nameof(CanAddCategory));
+                OnPropertyChanged(nameof(CanImportAnswerMap));
                 OnPropertyChanged(nameof(CanStartPractice));
+                OnPropertyChanged(nameof(CanStartWrongPractice));
                 OnPropertyChanged(nameof(CanDeleteCategory));
                 OnPropertyChanged(nameof(CanDeleteSourceFile));
+                OnPropertyChanged(nameof(CanStopPractice));
+                NotifyAnswerInputValidationState();
+                UpdateSourceFileActionState();
+            }
+        }
+    }
+
+    public bool IsPracticeStartInProgress
+    {
+        get => isPracticeStartInProgress;
+        private set
+        {
+            if (SetProperty(ref isPracticeStartInProgress, value))
+            {
+                OnPropertyChanged(nameof(CanModifyQuestionStructure));
+                OnPropertyChanged(nameof(CanAddCategory));
+                OnPropertyChanged(nameof(CanImportAnswerMap));
+                OnPropertyChanged(nameof(CanStartPractice));
+                OnPropertyChanged(nameof(CanStartWrongPractice));
+                OnPropertyChanged(nameof(CanDeleteCategory));
+                OnPropertyChanged(nameof(CanDeleteSourceFile));
+                UpdateSourceFileActionState();
             }
         }
     }
@@ -315,12 +523,15 @@ public class MainViewModel : ViewModelBase
         {
             if (SetProperty(ref selectedCategory, value))
             {
+                ResetSelectedCategorySummary();
                 OnPropertyChanged(nameof(HasSelectedCategory));
                 OnPropertyChanged(nameof(CanStartPractice));
                 OnPropertyChanged(nameof(CanDeleteCategory));
                 OnPropertyChanged(nameof(CanDeleteSourceFile));
                 OnPropertyChanged(nameof(CanImportAnswerMap));
-                _ = UpdateSelectedCategoryQuestionCountAsync();
+                RunBackground(
+                    UpdateSelectedCategoryQuestionCountAsync,
+                    "카테고리 문항 수를 갱신하지 못했습니다");
             }
         }
     }
@@ -346,7 +557,9 @@ public class MainViewModel : ViewModelBase
             {
                 OnPropertyChanged(nameof(MaxPracticeCount));
                 OnPropertyChanged(nameof(CanStartPractice));
-                _ = UpdateSelectedCategoryQuestionCountAsync();
+                RunBackground(
+                    UpdateSelectedCategoryQuestionCountAsync,
+                    "연습 가능 문항 수를 갱신하지 못했습니다");
             }
         }
     }
@@ -354,13 +567,26 @@ public class MainViewModel : ViewModelBase
     public Question? CurrentQuestion
     {
         get => currentQuestion;
-        private set => SetProperty(ref currentQuestion, value);
+        private set
+        {
+            if (SetProperty(ref currentQuestion, value))
+            {
+                OnPropertyChanged(nameof(CurrentQuestionSemanticDescription));
+                NotifyAnswerInputValidationState();
+            }
+        }
     }
 
     public int SessionTotalCount
     {
         get => sessionCount;
-        private set => SetProperty(ref sessionCount, value);
+        private set
+        {
+            if (SetProperty(ref sessionCount, value))
+            {
+                OnPropertyChanged(nameof(NextQuestionButtonText));
+            }
+        }
     }
 
     public int SessionCurrentIndex
@@ -371,6 +597,7 @@ public class MainViewModel : ViewModelBase
             if (SetProperty(ref currentIndex, value))
             {
                 OnPropertyChanged(nameof(ProgressDisplay));
+                OnPropertyChanged(nameof(NextQuestionButtonText));
             }
         }
     }
@@ -399,22 +626,131 @@ public class MainViewModel : ViewModelBase
 
     public int WrongQuestionCount => WrongQuestions.Count;
 
-    public bool CanAddCategory => !string.IsNullOrWhiteSpace(NewCategoryName);
+    public bool CanModifyQuestionStructure =>
+        !IsInitializing &&
+        !IsSelectedCategoryLoading &&
+        !IsStructuralOperationInProgress &&
+        !IsPracticeRunning &&
+        !IsPracticeStartInProgress &&
+        !IsPdfAnalysisInProgress &&
+        !IsSourceFileImportInProgress;
+
+    public bool CanAddCategory => CanModifyQuestionStructure && !string.IsNullOrWhiteSpace(NewCategoryName);
 
     public bool HasSelectedCategory => SelectedCategory != null;
 
-    public bool CanDeleteCategory => SelectedCategory != null && !IsPracticeRunning;
+    public bool CanDeleteCategory => SelectedCategory != null && CanModifyQuestionStructure;
 
-    public bool CanDeleteSourceFile => SelectedSourceFile != null && SelectedCategory != null && !IsPracticeRunning;
+    public bool CanDeleteSourceFile =>
+        SelectedSourceFile != null &&
+        SelectedCategory != null &&
+        CanModifyQuestionStructure;
 
     public bool CanStartPractice =>
         HasSelectedCategory &&
-        !IsPracticeRunning &&
-        !IsPdfAnalysisInProgress &&
+        CanModifyQuestionStructure &&
         int.TryParse(PracticeCountText, out var count) && count > 0 &&
         count <= MaxPracticeCount;
 
-    public bool CanStartWrongPractice => !IsPracticeRunning && WrongQuestionCount > 0;
+    public bool CanStartWrongPractice =>
+        CanModifyQuestionStructure &&
+        WrongQuestionCount > 0;
+
+    public bool IsMultipleChoiceAnswerExpected =>
+        IsPracticeRunning &&
+        CurrentQuestion?.Type == QuestionType.MultipleChoice &&
+        CurrentQuestion.CorrectAnswers?.Any(x => !string.IsNullOrWhiteSpace(x)) == true;
+
+    public string UserAnswerValidationMessage
+    {
+        get
+        {
+            if (!IsMultipleChoiceAnswerExpected)
+            {
+                return string.Empty;
+            }
+
+            if (string.IsNullOrWhiteSpace(UserAnswer))
+            {
+                return "객관식 답을 입력해 주세요.";
+            }
+
+            if (!TryParsePositiveInteger(UserAnswer, out var answerNumber))
+            {
+                return "객관식 답은 1 이상의 정수 하나만 입력해 주세요.";
+            }
+
+            var choiceCount = CurrentQuestion?.Choices?.Length ?? 0;
+            return choiceCount > 0 && answerNumber > choiceCount
+                ? $"객관식 답은 1부터 {choiceCount} 사이에서 입력해 주세요."
+                : string.Empty;
+        }
+    }
+
+    public int GradedCount
+    {
+        get => gradedCount;
+        private set => SetProperty(ref gradedCount, value);
+    }
+
+    public bool IsAnswerRevealed
+    {
+        get => isAnswerRevealed;
+        private set
+        {
+            if (SetProperty(ref isAnswerRevealed, value))
+            {
+                OnPropertyChanged(nameof(CanEnterAnswer));
+                OnPropertyChanged(nameof(CanGoToNextQuestion));
+                OnPropertyChanged(nameof(NextQuestionButtonText));
+                NotifyAnswerInputValidationState();
+            }
+        }
+    }
+
+    public bool IsAnswerSubmissionInProgress
+    {
+        get => isAnswerSubmissionInProgress;
+        private set
+        {
+            if (SetProperty(ref isAnswerSubmissionInProgress, value))
+            {
+                OnPropertyChanged(nameof(SubmitAnswerButtonText));
+                OnPropertyChanged(nameof(CanStopPractice));
+                NotifyAnswerInputValidationState();
+            }
+        }
+    }
+
+    public bool HasUserAnswerValidationError =>
+        !string.IsNullOrWhiteSpace(UserAnswerValidationMessage);
+
+    public bool CanSubmitAnswer =>
+        IsPracticeRunning &&
+        CurrentQuestion != null &&
+        !IsAnswerRevealed &&
+        !IsAnswerSubmissionInProgress &&
+        !HasUserAnswerValidationError;
+
+    public bool CanEnterAnswer =>
+        IsPracticeRunning &&
+        CurrentQuestion != null &&
+        !IsAnswerRevealed &&
+        !IsAnswerSubmissionInProgress;
+
+    public bool CanGoToNextQuestion =>
+        IsPracticeRunning &&
+        CurrentQuestion != null &&
+        IsAnswerRevealed &&
+        !IsAnswerSubmissionInProgress;
+
+    public bool CanStopPractice => IsPracticeRunning && !IsAnswerSubmissionInProgress;
+
+    public string SubmitAnswerButtonText =>
+        IsAnswerSubmissionInProgress ? "채점 중…" : "채점";
+
+    public string NextQuestionButtonText =>
+        SessionCurrentIndex + 1 >= SessionTotalCount ? "결과 보기" : "다음 문제";
 
     public string ProgressDisplay =>
         IsPracticeRunning
@@ -422,6 +758,21 @@ public class MainViewModel : ViewModelBase
             : string.Empty;
 
     public string CurrentQuestionText => CurrentQuestion?.Prompt ?? string.Empty;
+
+    public string CurrentQuestionSemanticDescription
+    {
+        get
+        {
+            return string.Join(
+                ". ",
+                new[]
+                {
+                    CurrentQuestionSourceDisplay,
+                    CurrentQuestionText,
+                    CurrentQuestionChoicesText
+                }.Where(value => !string.IsNullOrWhiteSpace(value)));
+        }
+    }
 
     public string CurrentQuestionSourceDisplay
     {
@@ -443,56 +794,72 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    public double CurrentQuestionImageViewportWidth
-    {
-        get
-        {
-            var idiom = DeviceInfo.Idiom;
-            if (idiom == DeviceIdiom.Desktop)
-            {
-                return DesktopQuestionImageViewportWidth;
-            }
+    public double CurrentQuestionImageViewportWidth => currentQuestionImageViewportWidth;
 
-            if (idiom == DeviceIdiom.Tablet)
-            {
-                return TabletQuestionImageViewportWidth;
-            }
-
-            return PhoneQuestionImageViewportWidth;
-        }
-    }
-
-    public double CurrentQuestionImageViewportHeight
-    {
-        get
-        {
-            var idiom = DeviceInfo.Idiom;
-            if (idiom == DeviceIdiom.Desktop)
-            {
-                return DesktopQuestionImageViewportHeight;
-            }
-
-            if (idiom == DeviceIdiom.Tablet)
-            {
-                return TabletQuestionImageViewportHeight;
-            }
-
-            return PhoneQuestionImageViewportHeight;
-        }
-    }
+    public double CurrentQuestionImageViewportHeight => currentQuestionImageViewportHeight;
 
     public bool HasCurrentQuestionImages => CurrentQuestionImageSlices.Count > 0;
 
     public bool ShowCurrentQuestionText => !HasCurrentQuestionImages;
 
+    public string QuestionImageNotice
+    {
+        get => questionImageNotice;
+        private set
+        {
+            if (SetProperty(ref questionImageNotice, value))
+            {
+                OnPropertyChanged(nameof(HasQuestionImageNotice));
+            }
+        }
+    }
+
+    public bool HasQuestionImageNotice => !string.IsNullOrWhiteSpace(QuestionImageNotice);
+
     public string CurrentQuestionChoicesText => CurrentQuestion is null || CurrentQuestion.Choices.Length == 0
         ? string.Empty
         : string.Join("\n", CurrentQuestion.Choices.Select((x, i) => $"{i + 1}. {x}"));
+
+    public double QuestionImageZoom
+    {
+        get => questionImageZoom;
+        private set
+        {
+            if (SetProperty(ref questionImageZoom, value))
+            {
+                OnPropertyChanged(nameof(QuestionImageZoomText));
+                OnPropertyChanged(nameof(CanIncreaseQuestionImageZoom));
+                OnPropertyChanged(nameof(CanDecreaseQuestionImageZoom));
+                OnPropertyChanged(nameof(CanResetQuestionImageZoom));
+                IncreaseQuestionImageZoomCommand.RaiseCanExecuteChanged();
+                DecreaseQuestionImageZoomCommand.RaiseCanExecuteChanged();
+                ResetQuestionImageZoomCommand.RaiseCanExecuteChanged();
+                UpdateCurrentQuestionImageSlices(CurrentQuestion);
+            }
+        }
+    }
+
+    public string QuestionImageZoomText => $"{QuestionImageZoom * 100:0}%";
+
+    public bool CanIncreaseQuestionImageZoom => QuestionImageZoom < MaxQuestionImageZoom - 0.001d;
+
+    public bool CanDecreaseQuestionImageZoom => QuestionImageZoom > MinQuestionImageZoom + 0.001d;
+
+    public bool CanResetQuestionImageZoom => Math.Abs(QuestionImageZoom - 1d) > 0.001d;
+
+    public double QuestionImagePreviewScale
+    {
+        get => questionImagePreviewScale;
+        private set => SetProperty(ref questionImagePreviewScale, value);
+    }
 
     public RelayCommand AddCategoryCommand { get; }
     public RelayCommand ImportAnswerMapCommand { get; }
     public RelayCommand StartPracticeCommand { get; }
     public RelayCommand SubmitAnswerCommand { get; }
+    public RelayCommand NextQuestionCommand { get; }
+    public RelayCommand StopPracticeCommand { get; }
+    public RelayCommand CancelPdfAnalysisCommand { get; }
     public RelayCommand StartWrongPracticeCommand { get; }
     public RelayCommand ReloadWrongCommand { get; }
     public RelayCommand<Guid?> RemoveWrongCommand { get; }
@@ -504,6 +871,11 @@ public class MainViewModel : ViewModelBase
     public RelayCommand ShowImportWorkspaceCommand { get; }
     public RelayCommand ShowPracticeWorkspaceCommand { get; }
     public RelayCommand ShowWrongWorkspaceCommand { get; }
+    public RelayCommand ToggleTopSummaryCommand { get; }
+    public RelayCommand IncreaseQuestionImageZoomCommand { get; }
+    public RelayCommand DecreaseQuestionImageZoomCommand { get; }
+    public RelayCommand ResetQuestionImageZoomCommand { get; }
+    public RelayCommand ClearFeedbackCommand { get; }
 
     public MainViewModel() : this(new PracticeRepository(), new PdfAnalysisService())
     {
@@ -513,36 +885,155 @@ public class MainViewModel : ViewModelBase
     {
         this.repository = repository;
         this.pdfAnalysisService = pdfAnalysisService;
+        var idiom = DeviceInfo.Idiom;
+        var initialWidth = idiom == DeviceIdiom.Desktop
+            ? 1280d
+            : idiom == DeviceIdiom.Tablet
+                ? 1000d
+                : 390d;
+        ApplyWorkspaceMetrics(ResponsiveLayoutCalculator.Calculate(
+            initialWidth,
+            idiom == DeviceIdiom.Phone ? 760d : 900d,
+            WideWorkspaceMinimumWidth,
+            WideWorkspaceHorizontalChrome,
+            NarrowWorkspaceHorizontalChrome,
+            220d,
+            920d,
+            220d,
+            620d), rebuildImages: false);
+        isTopSummaryExpanded = UseWideWorkspaceLayout;
         sourceFileDirectory = Path.Combine(FileSystem.AppDataDirectory, SourceFileDirectoryName);
         sourceAnalysisDirectory = Path.Combine(sourceFileDirectory, AnalysisDirectoryName);
-        AddCategoryCommand = new RelayCommand(async void () => await AddCategoryAsync());
-        ImportAnswerMapCommand = new RelayCommand(async void () => await ImportAnswerMapAsync());
-        StartPracticeCommand = new RelayCommand(async void () => await StartPracticeAsync());
-        SubmitAnswerCommand = new RelayCommand(async void () => await SubmitAnswerAsync());
-        StartWrongPracticeCommand = new RelayCommand(async void () => await StartWrongPracticeAsync());
-        ReloadWrongCommand = new RelayCommand(async void () => await ReloadWrongAsync());
-        RemoveWrongCommand = new RelayCommand<Guid?>(GuidFromObject(RemoveWrongById));
-        DeleteCategoryCommand = new RelayCommand(async void () => await DeleteCategoryAsync());
-        DeleteSourceFileCommand = new RelayCommand<SourceFileSummary?>(async source => await DeleteSourceFileAsync(source));
-        LoadAnswerFileCommand = new RelayCommand(async void () => await LoadAnswerFileAsync());
-        LoadSourceFilesFromDirectoryCommand = new RelayCommand(async void () => await LoadSourceFilesFromDirectoryAsync());
-        ImportSourceFileCommand = new RelayCommand(async void () => await ImportSourceFileAsync());
+        AddCategoryCommand = CreateAsyncCommand(AddCategoryAsync);
+        ImportAnswerMapCommand = CreateAsyncCommand(ImportAnswerMapAsync);
+        StartPracticeCommand = CreateAsyncCommand(StartPracticeAsync);
+        SubmitAnswerCommand = CreateAsyncCommand(SubmitAnswerAsync);
+        NextQuestionCommand = new RelayCommand(GoToNextQuestion);
+        StopPracticeCommand = CreateAsyncCommand(StopPracticeAsync);
+        CancelPdfAnalysisCommand = new RelayCommand(CancelPdfAnalysis, () => CanCancelPdfAnalysis);
+        StartWrongPracticeCommand = CreateAsyncCommand(StartWrongPracticeAsync);
+        ReloadWrongCommand = CreateAsyncCommand(ReloadWrongAsync);
+        RemoveWrongCommand = CreateAsyncCommand<Guid?>(async questionId =>
+        {
+            if (questionId.HasValue && questionId.Value != Guid.Empty)
+            {
+                await RemoveWrongById(questionId.Value);
+            }
+        });
+        DeleteCategoryCommand = CreateAsyncCommand(DeleteCategoryAsync);
+        DeleteSourceFileCommand = CreateAsyncCommand<SourceFileSummary?>(DeleteSourceFileAsync);
+        LoadAnswerFileCommand = CreateAsyncCommand(LoadAnswerFileAsync);
+        LoadSourceFilesFromDirectoryCommand = CreateAsyncCommand(LoadSourceFilesFromDirectoryAsync);
+        ImportSourceFileCommand = CreateAsyncCommand(ImportSourceFileAsync);
         ShowImportWorkspaceCommand = new RelayCommand(() => SetWorkspaceSection(WorkspaceSectionImport));
         ShowPracticeWorkspaceCommand = new RelayCommand(() => SetWorkspaceSection(WorkspaceSectionPractice));
         ShowWrongWorkspaceCommand = new RelayCommand(() => SetWorkspaceSection(WorkspaceSectionWrong));
+        ToggleTopSummaryCommand = new RelayCommand(() => IsTopSummaryExpanded = !IsTopSummaryExpanded);
+        IncreaseQuestionImageZoomCommand = new RelayCommand(
+            () => SetQuestionImageZoom(QuestionImageZoom + QuestionImageZoomStep),
+            () => CanIncreaseQuestionImageZoom);
+        DecreaseQuestionImageZoomCommand = new RelayCommand(
+            () => SetQuestionImageZoom(QuestionImageZoom - QuestionImageZoomStep),
+            () => CanDecreaseQuestionImageZoom);
+        ResetQuestionImageZoomCommand = new RelayCommand(
+            () => SetQuestionImageZoom(1d),
+            () => CanResetQuestionImageZoom);
+        ClearFeedbackCommand = new RelayCommand(() => Feedback = string.Empty);
 
         _ = InitializeAsync();
     }
 
-    private static Action<Guid?> GuidFromObject(Func<Guid, Task> action)
+    private RelayCommand CreateAsyncCommand(Func<Task> execute)
     {
-        return parameter =>
-        {
-            if (parameter.HasValue && parameter.Value != Guid.Empty)
+        var isExecuting = 0;
+        RelayCommand? command = null;
+        command = new RelayCommand(
+            async void () =>
             {
-                _ = action(parameter.Value);
-            }
-        };
+                if (Interlocked.CompareExchange(ref isExecuting, 1, 0) != 0)
+                {
+                    return;
+                }
+
+                command!.RaiseCanExecuteChanged();
+                try
+                {
+                    await ExecuteSafelyAsync(execute, "작업 중 오류가 발생했습니다");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref isExecuting, 0);
+                    command!.RaiseCanExecuteChanged();
+                }
+            },
+            () => Volatile.Read(ref isExecuting) == 0);
+        return command;
+    }
+
+    private RelayCommand<T> CreateAsyncCommand<T>(Func<T?, Task> execute)
+    {
+        var isExecuting = 0;
+        RelayCommand<T>? command = null;
+        command = new RelayCommand<T>(
+            async parameter =>
+            {
+                if (Interlocked.CompareExchange(ref isExecuting, 1, 0) != 0)
+                {
+                    return;
+                }
+
+                command!.RaiseCanExecuteChanged();
+                try
+                {
+                    await ExecuteSafelyAsync(
+                        () => execute(parameter),
+                        "작업 중 오류가 발생했습니다");
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref isExecuting, 0);
+                    command!.RaiseCanExecuteChanged();
+                }
+            },
+            _ => Volatile.Read(ref isExecuting) == 0);
+        return command;
+    }
+
+    private bool TryBeginStructuralOperation(string busyMessage)
+    {
+        if (!CanModifyQuestionStructure ||
+            Interlocked.CompareExchange(ref structuralOperationGate, 1, 0) != 0)
+        {
+            Feedback = busyMessage;
+            return false;
+        }
+
+        IsStructuralOperationInProgress = true;
+        return true;
+    }
+
+    private void EndStructuralOperation()
+    {
+        Interlocked.Exchange(ref structuralOperationGate, 0);
+        IsStructuralOperationInProgress = false;
+    }
+
+    private void RunBackground(Func<Task> execute, string failureMessage)
+    {
+        _ = ExecuteSafelyAsync(execute, failureMessage);
+    }
+
+    private async Task ExecuteSafelyAsync(Func<Task> execute, string failureMessage)
+    {
+        try
+        {
+            await execute();
+        }
+        catch (Exception ex)
+        {
+            Feedback = $"{failureMessage}: {ex.Message}";
+            AppLog.Error(nameof(MainViewModel), failureMessage, ex);
+        }
     }
 
     private async Task InitializeAsync()
@@ -555,6 +1046,10 @@ public class MainViewModel : ViewModelBase
         {
             Feedback = $"초기 데이터를 불러오지 못했습니다: {ex.Message}";
             AppLog.Error(nameof(MainViewModel), "초기화 실패", ex);
+        }
+        finally
+        {
+            IsInitializing = false;
         }
     }
 
@@ -580,33 +1075,69 @@ public class MainViewModel : ViewModelBase
 
     private async Task AddCategoryAsync()
     {
+        if (!CanModifyQuestionStructure)
+        {
+            Feedback = IsPracticeRunning
+                ? "연습 중에는 카테고리를 추가할 수 없습니다."
+                : "문항 분석 중에는 카테고리를 추가할 수 없습니다.";
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(NewCategoryName))
         {
             Feedback = "카테고리 이름이 비어 있습니다.";
             return;
         }
 
-        var category = await repository.AddOrGetCategoryAsync(NewCategoryName);
-        if (!Categories.Any(x => x.Id == category.Id))
+        if (!TryBeginStructuralOperation("다른 문항 구조 변경 작업이 진행 중입니다."))
         {
-            Categories.Add(category);
-            Feedback = $"카테고리 '{category.Name}'를 추가했습니다.";
-        }
-        else
-        {
-            Feedback = $"카테고리 '{category.Name}'가 이미 존재합니다.";
+            return;
         }
 
-        SelectedCategory = category;
-        NewCategoryName = string.Empty;
-        await UpdateSelectedCategoryQuestionCountAsync();
+        var categoryName = NewCategoryName;
+        try
+        {
+            var category = await repository.AddOrGetCategoryAsync(categoryName);
+            if (!Categories.Any(x => x.Id == category.Id))
+            {
+                Categories.Add(category);
+                Feedback = $"카테고리 '{category.Name}'를 추가했습니다.";
+            }
+            else
+            {
+                Feedback = $"카테고리 '{category.Name}'가 이미 존재합니다.";
+            }
+
+            SelectedCategory = category;
+            NewCategoryName = string.Empty;
+            await UpdateSelectedCategoryQuestionCountAsync();
+        }
+        finally
+        {
+            EndStructuralOperation();
+        }
     }
 
     private async Task ImportAnswerMapAsync()
     {
+        if (!IsPdfAnalysisSupported)
+        {
+            Feedback = "현재 iOS에서는 PDF OCR 분석을 지원하지 않습니다. Windows, Android 또는 OCR 도구가 설치된 Mac에서 문항을 먼저 반영해 주세요.";
+            return;
+        }
+
+        if (!CanModifyQuestionStructure)
+        {
+            Feedback = IsPracticeRunning
+                ? "연습 중에는 문항을 가져오거나 갱신할 수 없습니다."
+                : "이미 문항 분석이 진행 중입니다.";
+            return;
+        }
+
         SetWorkspaceSection(WorkspaceSectionImport);
 
-        if (SelectedCategory == null)
+        var targetCategory = SelectedCategory;
+        if (targetCategory == null)
         {
             Feedback = "카테고리를 선택해 주세요.";
             return;
@@ -621,13 +1152,48 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(SelectedSourceFileName))
+        var selectedSourceFileSnapshot = SelectedSourceFileName;
+        if (string.IsNullOrWhiteSpace(selectedSourceFileSnapshot))
         {
             Feedback = "문항 파일을 먼저 선택해 주세요.";
             return;
         }
 
-        var normalizedSourceFileName = NormalizeSourceFileName(SelectedSourceFileName);
+        var answerMapSnapshot = AnswerMapText;
+        var explicitEmptyAnswerIndexes = GetExplicitEmptyAnswerIndexes(answerMapSnapshot);
+        var result = QuestionSetParser.ParseAnswerMapWithDetails(answerMapSnapshot);
+        var blockingParseErrors = result.Errors
+            .Where(error => !IsAllowedExplicitEmptyAnswerError(error, explicitEmptyAnswerIndexes))
+            .ToArray();
+        if (blockingParseErrors.Length > 0)
+        {
+            Feedback = $"정답맵 검증 오류: {string.Join(", ", blockingParseErrors)}\n문항 반영을 중단했습니다.";
+            return;
+        }
+
+        var nonPositiveMultipleChoiceAnswerIndexes = result.Questions
+            .Where(question =>
+                question.Type == QuestionType.MultipleChoice &&
+                question.CorrectAnswers.Any(answer =>
+                    int.TryParse(answer, out var value) && value <= 0))
+            .Select(question => question.Index)
+            .Distinct()
+            .OrderBy(index => index)
+            .ToArray();
+        if (nonPositiveMultipleChoiceAnswerIndexes.Length > 0)
+        {
+            Feedback = "객관식 정답은 1 이상의 정수여야 합니다. 확인할 문항: " +
+                       string.Join(", ", nonPositiveMultipleChoiceAnswerIndexes) +
+                       "\n문항 반영을 중단했습니다.";
+            return;
+        }
+
+        var answerIndexesToUpdate = result.Questions
+            .Select(x => x.Index)
+            .Where(x => x > 0)
+            .ToHashSet();
+        var overwriteExistingSnapshot = OverwriteExisting;
+        var normalizedSourceFileName = NormalizeSourceFileName(selectedSourceFileSnapshot);
         var sourceFilePath = ResolveSourceFilePath(normalizedSourceFileName);
         if (string.IsNullOrWhiteSpace(sourceFilePath) || !File.Exists(sourceFilePath))
         {
@@ -640,9 +1206,13 @@ public class MainViewModel : ViewModelBase
 
         AppLog.Info(
             nameof(MainViewModel),
-            $"문항 분석 시작 | category={SelectedCategory.Id} | file={sourceFilePath}");
+            $"문항 분석 시작 | category={targetCategory.Id} | file={sourceFilePath}");
 
         ClearPdfAnalysisState();
+        isPdfAnalysisCommitStarted = false;
+        pdfAnalysisCancellation?.Dispose();
+        var analysisCancellation = new CancellationTokenSource();
+        pdfAnalysisCancellation = analysisCancellation;
         IsPdfAnalysisInProgress = true;
         pdfAnalysisStartAt = DateTimeOffset.UtcNow;
         PdfAnalysisProgressValue = 0d;
@@ -650,13 +1220,25 @@ public class MainViewModel : ViewModelBase
         PdfAnalysisStatusColor = Color.FromArgb("#0EA5E9");
         Feedback = PdfAnalysisStatus;
 
+        var questionCommitCompleted = false;
+        var committedQuestionCount = 0;
+
         try
         {
-            var progress = new Progress<PdfAnalysisProgress>(UpdatePdfAnalysisProgress);
+            var progress = new Progress<PdfAnalysisProgress>(value =>
+            {
+                if (ReferenceEquals(pdfAnalysisCancellation, analysisCancellation) &&
+                    !analysisCancellation.IsCancellationRequested)
+                {
+                    UpdatePdfAnalysisProgress(value);
+                }
+            });
             var analysis = await pdfAnalysisService.AnalyzePdfAsync(
                 sourceFilePath,
                 progress,
-                expectedQuestionInput.ExplicitRange);
+                expectedQuestionInput.ExplicitRange,
+                analysisCancellation.Token);
+            analysisCancellation.Token.ThrowIfCancellationRequested();
             if (!analysis.IsSuccess)
             {
                 PdfAnalysisSummary = $"문항 분석 실패: {analysis.Message}";
@@ -677,7 +1259,10 @@ public class MainViewModel : ViewModelBase
             if (resolvedExpectedQuestionRange.IsAutoInferred &&
                 resolvedExpectedQuestionRange.Range is QuestionNumberRange inferredRange)
             {
-                var refinedCandidates = OcrQuestionSegmenter.SplitByHeader(analysis.Pages, inferredRange);
+                PdfAnalysisStatus = "예상 문항 범위에 맞춰 구조를 다시 검증하고 있습니다.";
+                var refinedCandidates = await Task.Run(
+                    () => OcrQuestionSegmenter.SplitByHeader(analysis.Pages, inferredRange),
+                    analysisCancellation.Token);
                 analysis = WithQuestionCandidates(analysis, refinedCandidates);
                 AppLog.Info(
                     nameof(MainViewModel),
@@ -693,22 +1278,40 @@ public class MainViewModel : ViewModelBase
             UpdatePdfAnalysisProgress(new PdfAnalysisProgress(
                 analysis.PageCount,
                 analysis.PageCount,
-                "문항 데이터 저장 중"));
+                "OCR 완료 · 문항 구조 검증 중"));
 
-            await SavePdfAnalysisAsync(normalizedSourceFileName, analysis);
-            var diagnostics = BuildPdfAnalysisDiagnostics(
+            analysisCancellation.Token.ThrowIfCancellationRequested();
+
+            var diagnostics = await Task.Run(
+                () => BuildPdfAnalysisDiagnostics(
+                    normalizedSourceFileName,
+                    analysis,
+                    expectedQuestionInput,
+                    resolvedExpectedQuestionRange),
+                analysisCancellation.Token);
+            var repairResult = await Task.Run(
+                () => TryAutoRepairAnalysis(
+                    normalizedSourceFileName,
+                    analysis,
+                    diagnostics,
+                    expectedQuestionInput,
+                    resolvedExpectedQuestionRange),
+                analysisCancellation.Token);
+            analysis = repairResult.Analysis;
+            diagnostics = repairResult.Diagnostics;
+            analysisCancellation.Token.ThrowIfCancellationRequested();
+            await SavePdfAnalysisAsync(
                 normalizedSourceFileName,
                 analysis,
-                expectedQuestionInput,
-                resolvedExpectedQuestionRange);
-            (analysis, diagnostics) = TryAutoRepairAnalysis(
+                saveAsLatestAttempt: true);
+            analysisCancellation.Token.ThrowIfCancellationRequested();
+            LatestPdfDiagnosticsTitle = Path.GetFileName(normalizedSourceFileName);
+            LatestPdfDiagnosticsText = BuildDiagnosticsText(diagnostics);
+            var diagnosticsPath = await SavePdfAnalysisDiagnosticsAsync(
                 normalizedSourceFileName,
-                analysis,
                 diagnostics,
-                expectedQuestionInput,
-                resolvedExpectedQuestionRange);
-            await SavePdfAnalysisAsync(normalizedSourceFileName, analysis);
-            var diagnosticsPath = await SavePdfAnalysisDiagnosticsAsync(normalizedSourceFileName, diagnostics);
+                saveAsLatestAttempt: true);
+            analysisCancellation.Token.ThrowIfCancellationRequested();
             PdfAnalysisSummary = BuildAnalysisSummary(analysis, diagnostics);
             PdfAnalysisStatus = "문항 분석이 완료되었습니다.";
             PdfAnalysisStatusColor = Color.FromArgb("#16A34A");
@@ -738,28 +1341,15 @@ public class MainViewModel : ViewModelBase
                 return;
             }
 
-            var result = QuestionSetParser.ParseAnswerMapWithDetails(AnswerMapText);
-            if (!analysis.HasQuestionCandidates && result.IsEmpty)
+            if (!analysis.HasQuestionCandidates)
             {
-                Feedback = $"{analysis.Summary} / 문항 후보가 없어 저장할 수 없습니다.";
+                PdfAnalysisStatus = "문항 후보 검증에 실패했습니다.";
+                PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
+                Feedback = $"{analysis.Summary}\nOCR 문항 후보가 없어 문항 반영을 중단했습니다.";
                 AppLog.Error(
                     nameof(MainViewModel),
-                    $"문항 저장 중단 | 후보 0개 & 정답맵 비어있음 | file={sourceFilePath}");
+                    $"문항 저장 중단 | 후보 0개 | file={sourceFilePath}");
                 return;
-            }
-
-            var existingCount = await repository.GetQuestionCountBySourceFileAsync(
-                SelectedCategory.Id,
-                normalizedSourceFileName);
-            var shouldOverwrite = OverwriteExisting;
-            if (shouldOverwrite && existingCount > 0)
-            {
-                shouldOverwrite = await ConfirmOverwriteImportAsync(normalizedSourceFileName, existingCount);
-                if (!shouldOverwrite)
-                {
-                    Feedback = "문항 반영을 취소했습니다.";
-                    return;
-                }
             }
 
             var candidateByIndex = analysis.QuestionCandidates
@@ -773,9 +1363,38 @@ public class MainViewModel : ViewModelBase
                     x => x.Key,
                     x => x.OrderByDescending(q => q.CorrectAnswers.Length).First());
 
+            var answerIndexesOutsideCandidates = answerByIndex.Keys
+                .Except(candidateByIndex.Keys)
+                .OrderBy(x => x)
+                .ToArray();
+            if (answerIndexesOutsideCandidates.Length > 0)
+            {
+                PdfAnalysisStatus = "정답맵 문항 번호 검증에 실패했습니다.";
+                PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
+                Feedback = "정답맵에 OCR 문항 후보와 일치하지 않는 번호가 있습니다: " +
+                           $"{string.Join(", ", answerIndexesOutsideCandidates)}\n" +
+                           "정답맵 또는 OCR 분석 결과를 확인한 뒤 다시 시도해 주세요.";
+                AppLog.Error(
+                    nameof(MainViewModel),
+                    $"문항 저장 중단 | 후보 밖 정답 번호={string.Join(",", answerIndexesOutsideCandidates)} | file={sourceFilePath}");
+                return;
+            }
+
+            var existingCount = await repository.GetQuestionCountBySourceFileAsync(
+                targetCategory.Id,
+                normalizedSourceFileName);
+            var shouldOverwrite = overwriteExistingSnapshot;
+            if (shouldOverwrite && existingCount > 0)
+            {
+                shouldOverwrite = await ConfirmOverwriteImportAsync(normalizedSourceFileName, existingCount);
+                if (!shouldOverwrite)
+                {
+                    Feedback = "문항 덮어쓰기를 취소했거나 확인창을 표시할 수 없어 반영을 중단했습니다.";
+                    return;
+                }
+            }
+
             var sourceQuestionIndexes = candidateByIndex.Keys
-                .Concat(answerByIndex.Keys)
-                .Distinct()
                 .OrderBy(x => x)
                 .ToArray();
 
@@ -805,7 +1424,7 @@ public class MainViewModel : ViewModelBase
 
                     var question = new Question
                     {
-                        CategoryId = SelectedCategory.Id,
+                        CategoryId = targetCategory.Id,
                         SourceFileName = normalizedSourceFileName,
                         Index = x,
                         Type = questionType,
@@ -821,17 +1440,17 @@ public class MainViewModel : ViewModelBase
                     {
                         if (!string.IsNullOrWhiteSpace(candidate.PreviewText))
                         {
-                            question.Prompt = $"{SelectedCategory.Name} - {candidate.Header} {candidate.PreviewText}";
+                            question.Prompt = $"{targetCategory.Name} - {candidate.Header} {candidate.PreviewText}";
                         }
                         else
                         {
-                            question.Prompt = $"{SelectedCategory.Name} - {candidate.Header}";
+                            question.Prompt = $"{targetCategory.Name} - {candidate.Header}";
                         }
                     }
 
                     if (string.IsNullOrWhiteSpace(question.Prompt))
                     {
-                        question.Prompt = $"{SelectedCategory.Name} - 문항 {x}";
+                        question.Prompt = $"{targetCategory.Name} - 문항 {x}";
                     }
 
                     return question;
@@ -847,29 +1466,55 @@ public class MainViewModel : ViewModelBase
                 return;
             }
 
-            await repository.SaveImportedQuestionsAsync(
-                SelectedCategory.Id,
+            analysisCancellation.Token.ThrowIfCancellationRequested();
+            isPdfAnalysisCommitStarted = true;
+            OnPropertyChanged(nameof(CanCancelPdfAnalysis));
+            CancelPdfAnalysisCommand.RaiseCanExecuteChanged();
+            PdfAnalysisStatus = "검증된 문항을 저장하고 있습니다.";
+
+            var saveResult = await repository.SaveImportedQuestionsAsync(
+                targetCategory.Id,
                 normalizedSourceFileName,
                 questions,
                 overwriteBySourceFile: shouldOverwrite,
-                updateExistingCorrectAnswers: true);
+                updateExistingCorrectAnswers: true,
+                answerIndexesToUpdate: answerIndexesToUpdate);
+            questionCommitCompleted = true;
+            var isAnswerOnlyUpdate = !shouldOverwrite && !saveResult.StructureChanged;
+            committedQuestionCount = isAnswerOnlyUpdate
+                ? saveResult.UpdatedQuestionCount
+                : questions.Length;
+            if (saveResult.StructureChanged)
+            {
+                // 등록된 이미지 경계가 실제로 새 분석으로 교체된 경우에만
+                // 파일 검토 화면이 읽는 canonical 진단을 함께 승격한다.
+                await SavePdfAnalysisAsync(normalizedSourceFileName, analysis);
+                await SavePdfAnalysisDiagnosticsAsync(normalizedSourceFileName, diagnostics);
+            }
 
-            var mismatchMessage = BuildCandidateMismatchMessage(analysis, result, questions);
-            var existingQuestionUpdateMessage = existingCount > 0 && !shouldOverwrite
-                ? "기존 문항 구조는 유지하고 정답만 갱신했습니다"
+            var mismatchMessage = isAnswerOnlyUpdate
+                ? string.Empty
+                : BuildCandidateMismatchMessage(analysis, result, questions);
+            var existingQuestionUpdateMessage = isAnswerOnlyUpdate
+                ? "기존 이미지 경계는 유지하고 정답맵에 지정된 기존 번호만 갱신했습니다. 새로 검출된 번호를 추가하려면 덮어쓰기를 켜고 다시 반영해 주세요"
                 : string.Empty;
-            var summary = result.HasErrors || !string.IsNullOrWhiteSpace(mismatchMessage)
-                ? $"{questions.Length}개 저장"
-                  + (!result.HasErrors ? string.Empty : $"(일부 파싱 오류: {string.Join(", ", result.Errors)})")
-                  + (string.IsNullOrWhiteSpace(mismatchMessage) ? string.Empty : $" / {mismatchMessage}")
-                : $"{questions.Length}개 저장 완료";
+            var summary = isAnswerOnlyUpdate
+                ? saveResult.UpdatedQuestionCount > 0
+                    ? $"기존 문항 정답 {saveResult.UpdatedQuestionCount}개 갱신 완료"
+                    : "갱신할 기존 문항 정답 없음"
+                : !string.IsNullOrWhiteSpace(mismatchMessage)
+                    ? $"{questions.Length}개 저장 / {mismatchMessage}"
+                    : $"{questions.Length}개 저장 완료";
 
             Feedback = $"{analysis.Summary} / {summary}"
                        + (string.IsNullOrWhiteSpace(existingQuestionUpdateMessage) ? string.Empty : $" / {existingQuestionUpdateMessage}");
             AppLog.Info(
                 nameof(MainViewModel),
-                $"문항 반영 완료 | file={sourceFilePath} | saved={questions.Length}");
-            AnswerMapText = string.Empty;
+                $"문항 반영 완료 | file={sourceFilePath} | added={saveResult.AddedQuestionCount} | updated={saveResult.UpdatedQuestionCount} | removed={saveResult.RemovedQuestionCount} | structureChanged={saveResult.StructureChanged}");
+            if (string.Equals(AnswerMapText, answerMapSnapshot, StringComparison.Ordinal))
+            {
+                AnswerMapText = string.Empty;
+            }
             await UpdateSelectedCategoryQuestionCountAsync();
             var sourceFile = SourceFiles.FirstOrDefault(x =>
                 string.Equals(x.SourceFileName, normalizedSourceFileName, StringComparison.OrdinalIgnoreCase));
@@ -878,25 +1523,76 @@ public class MainViewModel : ViewModelBase
                 SelectedSourceFile = sourceFile;
             }
             await ReloadWrongAsync();
+            PdfAnalysisProgressValue = 1d;
+            PdfAnalysisStatus = isAnswerOnlyUpdate
+                ? $"기존 문항 정답 {saveResult.UpdatedQuestionCount}개 갱신과 화면 새로고침이 완료되었습니다."
+                : $"문항 {questions.Length}개 반영과 화면 갱신이 완료되었습니다.";
+            PdfAnalysisStatusColor = Color.FromArgb("#16A34A");
+        }
+        catch (OperationCanceledException) when (analysisCancellation.IsCancellationRequested)
+        {
+            PdfAnalysisSummary = "문항 분석이 취소되었습니다.";
+            PdfAnalysisStatus = "사용자 요청으로 문항 분석을 취소했습니다.";
+            PdfAnalysisStatusColor = Color.FromArgb("#475569");
+            Feedback = PdfAnalysisStatus;
+            AppLog.Info(
+                nameof(MainViewModel),
+                $"문항 분석 취소 | file={sourceFilePath}");
         }
         catch (Exception ex)
         {
-            Feedback = $"문항 분석 중 오류가 발생했습니다: {ex.Message}";
-            PdfAnalysisSummary = $"문항 분석 실패: {ex.Message}";
-            PdfAnalysisStatus = "문항 분석 중 오류가 발생했습니다.";
-            PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
-            AppLog.Error(
-                nameof(MainViewModel),
-                $"문항 분석 예외 | file={sourceFilePath}",
-                ex);
+            if (questionCommitCompleted)
+            {
+                PdfAnalysisStatus = "문항 저장은 완료되었지만 화면 갱신에 실패했습니다.";
+                PdfAnalysisStatusColor = Color.FromArgb("#D97706");
+                Feedback = $"문항 {committedQuestionCount}개 저장은 완료되었습니다. " +
+                           $"화면 목록을 갱신하지 못했습니다: {ex.Message}\n" +
+                           "다시 가져오지 말고 카테고리나 화면을 다시 열어 확인해 주세요.";
+                AppLog.Error(
+                    nameof(MainViewModel),
+                    $"문항 저장 후 화면 갱신 실패 | file={sourceFilePath} | saved={committedQuestionCount}",
+                    ex);
+            }
+            else
+            {
+                Feedback = $"문항 분석 중 오류가 발생했습니다: {ex.Message}";
+                PdfAnalysisSummary = $"문항 분석 실패: {ex.Message}";
+                PdfAnalysisStatus = "문항 분석 중 오류가 발생했습니다.";
+                PdfAnalysisStatusColor = Color.FromArgb("#DC2626");
+                AppLog.Error(
+                    nameof(MainViewModel),
+                    $"문항 분석 예외 | file={sourceFilePath}",
+                    ex);
+            }
         }
         finally
         {
+            if (ReferenceEquals(pdfAnalysisCancellation, analysisCancellation))
+            {
+                pdfAnalysisCancellation = null;
+            }
+
+            isPdfAnalysisCommitStarted = false;
+            analysisCancellation.Dispose();
             IsPdfAnalysisInProgress = false;
         }
     }
 
-    private static QuestionImageSegment[] BuildQuestionImageSegments(
+    private void CancelPdfAnalysis()
+    {
+        if (!IsPdfAnalysisInProgress || pdfAnalysisCancellation == null)
+        {
+            return;
+        }
+
+        PdfAnalysisStatus = "문항 분석 취소를 요청했습니다. 현재 작업을 정리하고 있습니다.";
+        PdfAnalysisStatusColor = Color.FromArgb("#D97706");
+        pdfAnalysisCancellation.Cancel();
+        OnPropertyChanged(nameof(CanCancelPdfAnalysis));
+        CancelPdfAnalysisCommand.RaiseCanExecuteChanged();
+    }
+
+    internal static QuestionImageSegment[] BuildQuestionImageSegments(
         OcrQuestionCandidate? candidate,
         IReadOnlyList<OcrQuestionCandidate> allCandidates,
         IReadOnlyList<OcrPageResult> pages)
@@ -908,7 +1604,22 @@ public class MainViewModel : ViewModelBase
 
         var pageByIndex = pages
             .Where(x => !string.IsNullOrWhiteSpace(x.ImagePath))
-            .ToDictionary(x => x.PageIndex, x => x);
+            .GroupBy(x => x.PageIndex)
+            .ToDictionary(x => x.Key, x => x.First());
+
+        var imageRegions = candidate.ImageRegions ?? Array.Empty<OcrQuestionImageRegion>();
+        var sharedContextRegions = candidate.SharedContextRegions ?? Array.Empty<OcrQuestionImageRegion>();
+        if (candidate.UsesSemanticImageRegions || imageRegions.Count > 0)
+        {
+            return sharedContextRegions
+                .Concat(imageRegions)
+                .Select(region => TryCreateQuestionImageSegment(region, pageByIndex))
+                .Where(segment => segment != null)
+                .Select(segment => segment!)
+                .GroupBy(x => $"{x.PageIndex}:{x.ImageLeftRatio:F6}:{x.ImageTopRatio:F6}:{x.ImageRightRatio:F6}:{x.ImageBottomRatio:F6}")
+                .Select(x => x.First())
+                .ToArray();
+        }
 
         var sharedSegments = BuildSharedContextImageSegments(candidate, allCandidates, pageByIndex);
         var segments = new List<QuestionImageSegment>();
@@ -1003,6 +1714,32 @@ public class MainViewModel : ViewModelBase
             .GroupBy(x => $"{x.PageIndex}:{x.ImageLeftRatio:F4}:{x.ImageTopRatio:F4}:{x.ImageRightRatio:F4}:{x.ImageBottomRatio:F4}")
             .Select(x => x.First())
             .ToArray();
+    }
+
+    private static QuestionImageSegment? TryCreateQuestionImageSegment(
+        OcrQuestionImageRegion region,
+        IReadOnlyDictionary<int, OcrPageResult> pageByIndex)
+    {
+        if (!pageByIndex.TryGetValue(region.PageIndex, out var page) ||
+            string.IsNullOrWhiteSpace(page.ImagePath) ||
+            !double.IsFinite(region.LeftRatio) ||
+            !double.IsFinite(region.TopRatio) ||
+            !double.IsFinite(region.RightRatio) ||
+            !double.IsFinite(region.BottomRatio))
+        {
+            return null;
+        }
+
+        var left = ClampRatio(region.LeftRatio);
+        var top = ClampRatio(region.TopRatio);
+        var right = ClampRatio(region.RightRatio);
+        var bottom = ClampRatio(region.BottomRatio);
+        if (right <= left || bottom <= top)
+        {
+            return null;
+        }
+
+        return CreateQuestionImageSegment(page, left, top, right, bottom);
     }
 
     private static QuestionImageSegment[] BuildSharedContextImageSegments(
@@ -1403,12 +2140,16 @@ public class MainViewModel : ViewModelBase
     {
         pdfAnalysisProcessedPages = 0;
         pdfAnalysisTotalPages = 0;
+        PdfAnalysisSummary = string.Empty;
+        LatestPdfDiagnosticsText = string.Empty;
+        LatestPdfDiagnosticsTitle = string.Empty;
         PdfAnalysisProgressValue = 0d;
         PdfAnalysisStatus = string.Empty;
         PdfAnalysisStatusColor = Color.FromArgb("#334155");
         PdfAnalysisPagesPerSecond = 0d;
         pdfAnalysisStartAt = DateTimeOffset.UtcNow;
         OnPropertyChanged(nameof(ShowPdfAnalysisProgress));
+        OnPropertyChanged(nameof(ShowPdfAnalysisPanel));
         OnPropertyChanged(nameof(PdfAnalysisProgressText));
     }
 
@@ -1416,6 +2157,7 @@ public class MainViewModel : ViewModelBase
     {
         pdfAnalysisProcessedPages = Math.Max(0, progress.ProcessedPages);
         pdfAnalysisTotalPages = Math.Max(0, progress.TotalPages);
+        OnPropertyChanged(nameof(PdfAnalysisProgressText));
 
         PdfAnalysisStatus = progress.Message;
         if (IsPdfAnalysisInProgress)
@@ -1441,6 +2183,11 @@ public class MainViewModel : ViewModelBase
 
     private async Task LoadAnswerFileAsync()
     {
+        if (!TryBeginStructuralOperation("다른 문항 구조 변경 작업이 진행 중입니다."))
+        {
+            return;
+        }
+
         try
         {
             var options = new PickOptions
@@ -1473,6 +2220,10 @@ public class MainViewModel : ViewModelBase
         {
             Feedback = $"정답 파일을 불러오지 못했습니다: {ex.Message}";
         }
+        finally
+        {
+            EndStructuralOperation();
+        }
     }
 
     private Task LoadSourceFilesFromDirectoryAsync()
@@ -1481,10 +2232,7 @@ public class MainViewModel : ViewModelBase
         {
             Directory.CreateDirectory(sourceFileDirectory);
             var seenFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var files = GetSourceFileSearchDirectories()
-                .Where(Directory.Exists)
-                .SelectMany(directory => Directory.EnumerateFiles(directory))
-                .Where(path => string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase))
+            var files = EnumerateSourcePdfFiles()
                 .Select(Path.GetFileName)
                 .Where(name => !string.IsNullOrWhiteSpace(name) && seenFiles.Add(name))
                 .Select(name => name!)
@@ -1516,8 +2264,51 @@ public class MainViewModel : ViewModelBase
         return Task.CompletedTask;
     }
 
+    private IEnumerable<string> EnumerateSourcePdfFiles()
+    {
+        foreach (var directory in GetSourceFileSearchDirectories())
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                continue;
+            }
+
+            string[] files;
+            try
+            {
+                files = Directory
+                    .EnumerateFiles(directory, "*.pdf", SearchOption.TopDirectoryOnly)
+                    .ToArray();
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or IOException)
+            {
+                AppLog.Error(
+                    nameof(MainViewModel),
+                    $"문항 파일 검색 폴더 건너뜀 | directory={directory} | reason={ex.Message}",
+                    ex);
+                continue;
+            }
+
+            foreach (var file in files)
+            {
+                yield return file;
+            }
+        }
+    }
+
     private async Task ImportSourceFileAsync()
     {
+        if (!CanModifyQuestionStructure)
+        {
+            Feedback = IsSourceFileImportInProgress
+                ? "이미 문항 PDF 등록이 진행 중입니다."
+                : IsPracticeRunning
+                    ? "연습 중에는 문항 PDF를 추가하거나 덮어쓸 수 없습니다."
+                    : "문항 분석 또는 다른 구조 변경 중에는 PDF를 추가하거나 덮어쓸 수 없습니다.";
+            return;
+        }
+
+        IsSourceFileImportInProgress = true;
         try
         {
             var options = new PickOptions
@@ -1539,11 +2330,26 @@ public class MainViewModel : ViewModelBase
                 return;
             }
 
+            if (!CanContinueSourceFileImport())
+            {
+                Feedback = "상태가 변경되어 문항 PDF 추가를 중단했습니다.";
+                return;
+            }
+
             Directory.CreateDirectory(sourceFileDirectory);
-            var sourceFileName = file.FileName?.Trim();
+            var rawSourceFileName = file.FileName?.Trim();
+            var sourceFileName = string.IsNullOrWhiteSpace(rawSourceFileName)
+                ? string.Empty
+                : Path.GetFileName(rawSourceFileName);
             if (string.IsNullOrWhiteSpace(sourceFileName))
             {
                 Feedback = "문항 파일 이름을 가져올 수 없습니다.";
+                return;
+            }
+
+            if (!string.Equals(Path.GetExtension(sourceFileName), ".pdf", StringComparison.OrdinalIgnoreCase))
+            {
+                Feedback = "PDF 파일만 등록할 수 있습니다.";
                 return;
             }
 
@@ -1553,39 +2359,167 @@ public class MainViewModel : ViewModelBase
                 var overwrite = await ConfirmOverwriteSourceFileAsync(sourceFileName);
                 if (!overwrite)
                 {
-                    Feedback = "문항 파일 등록을 취소했습니다.";
+                    Feedback = "문항 파일 등록을 취소했거나 확인창을 표시할 수 없어 중단했습니다.";
                     return;
                 }
             }
 
-            using var sourceStream = await file.OpenReadAsync();
-            using var destinationStream = File.Create(destinationPath);
-            await sourceStream.CopyToAsync(destinationStream);
+            if (!CanContinueSourceFileImport())
+            {
+                Feedback = "상태가 변경되어 문항 PDF 추가를 중단했습니다.";
+                return;
+            }
 
-            Feedback = $"문항 파일을 등록했습니다: {sourceFileName}";
+            Feedback = $"문항 PDF를 안전하게 등록하고 있습니다: {sourceFileName}";
+            await CopyPdfFileAtomicallyAsync(file, destinationPath);
+
             await LoadSourceFilesFromDirectoryAsync();
             SelectedSourceFileName = sourceFileName;
+            Feedback = $"문항 파일을 등록했습니다: {sourceFileName}";
         }
         catch (Exception ex)
         {
             Feedback = $"문항 파일 등록을 실패했습니다: {ex.Message}";
+            AppLog.Error(nameof(MainViewModel), "문항 PDF 등록 실패", ex);
+        }
+        finally
+        {
+            IsSourceFileImportInProgress = false;
         }
     }
 
-    private async Task SavePdfAnalysisAsync(string sourceFileName, PdfOcrResult analysis)
+    private bool CanContinueSourceFileImport()
+    {
+        return IsSourceFileImportInProgress &&
+               !IsPracticeRunning &&
+               !IsPracticeStartInProgress &&
+               !IsPdfAnalysisInProgress;
+    }
+
+    private static async Task CopyPdfFileAtomicallyAsync(FileResult sourceFile, string destinationPath)
+    {
+        var destinationDirectory = Path.GetDirectoryName(destinationPath);
+        if (string.IsNullOrWhiteSpace(destinationDirectory))
+        {
+            throw new InvalidOperationException("PDF 저장 폴더를 확인할 수 없습니다.");
+        }
+
+        Directory.CreateDirectory(destinationDirectory);
+        var stagedFilePath = Path.Combine(
+            destinationDirectory,
+            $".{Path.GetFileName(destinationPath)}.{Guid.NewGuid():N}.tmp");
+
+        try
+        {
+            await using (var sourceStream = await sourceFile.OpenReadAsync())
+            await using (var stagedStream = new FileStream(
+                             stagedFilePath,
+                             FileMode.CreateNew,
+                             FileAccess.Write,
+                             FileShare.None,
+                             bufferSize: 81920,
+                             FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                await sourceStream.CopyToAsync(stagedStream);
+                await stagedStream.FlushAsync();
+                stagedStream.Flush(flushToDisk: true);
+            }
+
+            ValidatePdfFile(stagedFilePath);
+            PromoteStagedFile(stagedFilePath, destinationPath);
+        }
+        finally
+        {
+            TryDeleteFile(stagedFilePath);
+        }
+    }
+
+    private static void ValidatePdfFile(string filePath)
+    {
+        using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        Span<byte> header = stackalloc byte[5];
+        if (stream.Length < header.Length ||
+            stream.Read(header) != header.Length ||
+            !header.SequenceEqual("%PDF-"u8))
+        {
+            throw new InvalidDataException("선택한 파일에서 유효한 PDF 헤더를 찾지 못했습니다.");
+        }
+    }
+
+    private static void PromoteStagedFile(string stagedFilePath, string destinationPath)
+    {
+        if (!File.Exists(destinationPath))
+        {
+            File.Move(stagedFilePath, destinationPath);
+            return;
+        }
+
+        var backupFilePath = destinationPath + $".replace-{Guid.NewGuid():N}.bak";
+        var promoted = false;
+        try
+        {
+            File.Replace(stagedFilePath, destinationPath, backupFilePath, ignoreMetadataErrors: true);
+            promoted = true;
+        }
+        catch (NotSupportedException)
+        {
+            File.Move(stagedFilePath, destinationPath, overwrite: true);
+            promoted = true;
+        }
+        finally
+        {
+            if (promoted)
+            {
+                TryDeleteFile(backupFilePath);
+            }
+        }
+    }
+
+    private static void TryDeleteFile(string filePath)
+    {
+        try
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            AppLog.Error(
+                nameof(MainViewModel),
+                $"임시 파일 정리 실패 | path={filePath}",
+                ex);
+        }
+    }
+
+    private async Task SavePdfAnalysisAsync(
+        string sourceFileName,
+        PdfOcrResult analysis,
+        bool saveAsLatestAttempt = false)
     {
         try
         {
             Directory.CreateDirectory(sourceAnalysisDirectory);
 
             var safeFileName = GetSafeFileNameWithoutExtension(sourceFileName);
-            var outputPath = Path.Combine(sourceAnalysisDirectory, $"{safeFileName}.analysis.json");
+            var fileQualifier = saveAsLatestAttempt ? ".latest-attempt" : ".committed";
+            var outputPath = Path.Combine(
+                sourceAnalysisDirectory,
+                $"{safeFileName}{fileQualifier}.analysis.json");
 
-            var json = JsonSerializer.Serialize(analysis, new JsonSerializerOptions
+            await using var outputStream = new FileStream(
+                outputPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                bufferSize: 81920,
+                FileOptions.Asynchronous);
+            await JsonSerializer.SerializeAsync(outputStream, analysis, new JsonSerializerOptions
             {
                 WriteIndented = true
             });
-            await File.WriteAllTextAsync(outputPath, json);
+            await outputStream.FlushAsync();
             AppLog.Info(
                 nameof(MainViewModel),
                 $"분석 JSON 저장 완료 | file={sourceFileName} | path={outputPath}");
@@ -1600,21 +2534,38 @@ public class MainViewModel : ViewModelBase
         }
     }
 
-    private async Task<string?> SavePdfAnalysisDiagnosticsAsync(string sourceFileName, PdfAnalysisDiagnostics diagnostics)
+    private async Task<string?> SavePdfAnalysisDiagnosticsAsync(
+        string sourceFileName,
+        PdfAnalysisDiagnostics diagnostics,
+        bool saveAsLatestAttempt = false)
     {
         try
         {
             Directory.CreateDirectory(sourceAnalysisDirectory);
 
             var safeFileName = GetSafeFileNameWithoutExtension(sourceFileName);
-            var jsonPath = Path.Combine(sourceAnalysisDirectory, $"{safeFileName}.diagnostics.json");
-            var textPath = Path.Combine(sourceAnalysisDirectory, $"{safeFileName}.diagnostics.txt");
+            var fileQualifier = saveAsLatestAttempt ? ".latest-attempt" : ".committed";
+            var jsonPath = Path.Combine(
+                sourceAnalysisDirectory,
+                $"{safeFileName}{fileQualifier}.diagnostics.json");
+            var textPath = Path.Combine(
+                sourceAnalysisDirectory,
+                $"{safeFileName}{fileQualifier}.diagnostics.txt");
 
-            var json = JsonSerializer.Serialize(diagnostics, new JsonSerializerOptions
+            await using (var jsonStream = new FileStream(
+                             jsonPath,
+                             FileMode.Create,
+                             FileAccess.Write,
+                             FileShare.None,
+                             bufferSize: 81920,
+                             FileOptions.Asynchronous))
             {
-                WriteIndented = true
-            });
-            await File.WriteAllTextAsync(jsonPath, json);
+                await JsonSerializer.SerializeAsync(jsonStream, diagnostics, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+                await jsonStream.FlushAsync();
+            }
             await File.WriteAllTextAsync(textPath, BuildDiagnosticsText(diagnostics));
             AppLog.Info(
                 nameof(MainViewModel),
@@ -1643,6 +2594,59 @@ public class MainViewModel : ViewModelBase
         return new string(baseName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
     }
 
+    private static HashSet<int> GetExplicitEmptyAnswerIndexes(string? answerMapText)
+    {
+        var latestExplicitStates = new Dictionary<int, bool>();
+        if (string.IsNullOrWhiteSpace(answerMapText))
+        {
+            return new HashSet<int>();
+        }
+
+        var pairs = answerMapText
+            .Replace("\r", string.Empty)
+            .Split(new[] { ',', '\n', ';' }, StringSplitOptions.TrimEntries);
+        if (!pairs.Any(x => x.Contains(':', StringComparison.Ordinal)))
+        {
+            return new HashSet<int>();
+        }
+
+        foreach (var pair in pairs.Where(x => !string.IsNullOrWhiteSpace(x)))
+        {
+            var split = pair.Split(':', 2);
+            if (split.Length != 2 ||
+                !int.TryParse(split[0].Trim(), out var index) ||
+                index <= 0)
+            {
+                continue;
+            }
+
+            var hasAnswer = split[1]
+                .Split('|', StringSplitOptions.None)
+                .Any(x => !string.IsNullOrWhiteSpace(x));
+            latestExplicitStates[index] = !hasAnswer;
+        }
+
+        return latestExplicitStates
+            .Where(x => x.Value)
+            .Select(x => x.Key)
+            .ToHashSet();
+    }
+
+    private static bool IsAllowedExplicitEmptyAnswerError(
+        string error,
+        IReadOnlySet<int> explicitEmptyAnswerIndexes)
+    {
+        const string prefix = "정답 없음:";
+        if (string.IsNullOrWhiteSpace(error) ||
+            !error.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(error[prefix.Length..].Trim(), out var index) &&
+               explicitEmptyAnswerIndexes.Contains(index);
+    }
+
 
     private static bool TryParseExpectedQuestionInput(
         string? rawValue,
@@ -1668,6 +2672,12 @@ public class MainViewModel : ViewModelBase
                 return false;
             }
 
+            if (count > MaximumExpectedQuestionCount)
+            {
+                errorMessage = $"예상 문항 수는 최대 {MaximumExpectedQuestionCount}개까지 입력할 수 있습니다.";
+                return false;
+            }
+
             expectedQuestionInput = ExpectedQuestionInput.FromCount(normalized, count);
             return true;
         }
@@ -1684,9 +2694,22 @@ public class MainViewModel : ViewModelBase
             return false;
         }
 
+        if (startIndex > MaximumExpectedQuestionNumber || endIndex > MaximumExpectedQuestionNumber)
+        {
+            errorMessage = $"예상 문항 번호는 최대 {MaximumExpectedQuestionNumber}번까지 입력할 수 있습니다.";
+            return false;
+        }
+
         if (startIndex > endIndex)
         {
             errorMessage = "예상 문항 범위의 시작 번호는 끝 번호보다 클 수 없습니다.";
+            return false;
+        }
+
+        var expectedCount = endIndex - startIndex + 1;
+        if (expectedCount > MaximumExpectedQuestionCount)
+        {
+            errorMessage = $"예상 문항 범위는 최대 {MaximumExpectedQuestionCount}개까지 입력할 수 있습니다.";
             return false;
         }
 
@@ -1938,42 +2961,74 @@ public class MainViewModel : ViewModelBase
 
     private static async Task<bool> ConfirmOverwriteImportAsync(string sourceFileName, int existingCount)
     {
-        var page = App.CurrentPage;
-        if (page == null)
-        {
-            return true;
-        }
-
         var message = $"'{sourceFileName}' 파일의 문항 {existingCount}개가 이미 등록되어 있습니다.\n" +
                       "덮어써서 새로 반영하시겠습니까?";
 
-        return await page.DisplayAlert(
+        return await ConfirmDestructiveActionAsync(
             "문항 반영",
             message,
-            "덮어쓰기",
-            "취소");
+            "덮어쓰기");
     }
 
     private static async Task<bool> ConfirmOverwriteSourceFileAsync(string sourceFileName)
     {
+        var message = $"'{sourceFileName}' 파일이 이미 존재합니다.\n덮어쓰기 하시겠습니까?";
+
+        return await ConfirmDestructiveActionAsync(
+            "문항 파일 등록",
+            message,
+            "덮어쓰기");
+    }
+
+    private static async Task<bool> ConfirmDestructiveActionAsync(
+        string title,
+        string message,
+        string acceptText)
+    {
         var page = App.CurrentPage;
         if (page == null)
         {
+            AppLog.Error(
+                nameof(MainViewModel),
+                $"확인창을 표시할 현재 페이지가 없어 작업을 중단했습니다. title={title}");
             return false;
         }
 
-        var message = $"'{sourceFileName}' 파일이 이미 존재합니다.\n덮어쓰기 하시겠습니까?";
-
-        return await page.DisplayAlert(
-            "문항 파일 등록",
-            message,
-            "덮어쓰기",
-            "취소");
+        try
+        {
+            return await page.DisplayAlert(title, message, acceptText, "취소");
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(
+                nameof(MainViewModel),
+                $"확인창 표시 실패로 작업을 중단했습니다. title={title}",
+                ex);
+            return false;
+        }
     }
 
     private async Task StartPracticeAsync()
     {
-        if (SelectedCategory == null)
+        if (IsPracticeStartInProgress || IsPracticeRunning)
+        {
+            return;
+        }
+
+        if (IsPdfAnalysisInProgress)
+        {
+            Feedback = "문항 분석이 끝난 뒤 연습을 시작해 주세요.";
+            return;
+        }
+
+        if (IsSourceFileImportInProgress)
+        {
+            Feedback = "문항 PDF 등록이 끝난 뒤 연습을 시작해 주세요.";
+            return;
+        }
+
+        var targetCategory = SelectedCategory;
+        if (targetCategory == null)
         {
             Feedback = "카테고리를 선택해 주세요.";
             return;
@@ -1991,37 +3046,70 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        var questions = await repository.GetQuestionsAsync(SelectedCategory.Id);
-        var practiceCandidates = (IncludeUnansweredInPractice
-                ? questions
-                : questions.Where(x => x.CorrectAnswers.Any(a => !string.IsNullOrWhiteSpace(a))))
-            .OrderBy(_ => random.Next())
-            .Take(count)
-            .ToList();
-
-        if (practiceCandidates.Count == 0)
+        var includeUnanswered = IncludeUnansweredInPractice;
+        IsPracticeStartInProgress = true;
+        try
         {
-            Feedback = IncludeUnansweredInPractice
-                ? "출제 가능한 문항이 없습니다."
-                : "정답이 등록된 문항이 없습니다.";
-            return;
-        }
+            var questions = await repository.GetQuestionsAsync(targetCategory.Id);
+            var practiceCandidates = (includeUnanswered
+                    ? questions
+                    : questions.Where(x => x.CorrectAnswers?.Any(a => !string.IsNullOrWhiteSpace(a)) == true))
+                .OrderBy(_ => random.Next())
+                .Take(count)
+                .ToList();
 
-        await StartWithQuestionsAsync(practiceCandidates);
-        
+            if (practiceCandidates.Count == 0)
+            {
+                Feedback = includeUnanswered
+                    ? "출제 가능한 문항이 없습니다."
+                    : "정답이 등록된 문항이 없습니다.";
+                return;
+            }
+
+            await StartWithQuestionsAsync(practiceCandidates);
+        }
+        finally
+        {
+            IsPracticeStartInProgress = false;
+        }
     }
 
     private async Task StartWrongPracticeAsync()
     {
-        var wrong = await repository.GetWrongQuestionsAsync();
-        if (wrong.Count == 0)
+        if (IsPracticeStartInProgress || IsPracticeRunning)
         {
-            Feedback = "오답 문제가 없습니다.";
             return;
         }
 
-        PracticeCountText = wrong.Count.ToString();
-        await StartWithQuestionsAsync(wrong);
+        if (IsPdfAnalysisInProgress)
+        {
+            Feedback = "문항 분석이 끝난 뒤 오답 연습을 시작해 주세요.";
+            return;
+        }
+
+        if (IsSourceFileImportInProgress)
+        {
+            Feedback = "문항 PDF 등록이 끝난 뒤 오답 연습을 시작해 주세요.";
+            return;
+        }
+
+        IsPracticeStartInProgress = true;
+        try
+        {
+            var wrong = await repository.GetWrongQuestionsAsync();
+            if (wrong.Count == 0)
+            {
+                Feedback = "오답 문제가 없습니다.";
+                return;
+            }
+
+            PracticeCountText = wrong.Count.ToString();
+            await StartWithQuestionsAsync(wrong);
+        }
+        finally
+        {
+            IsPracticeStartInProgress = false;
+        }
     }
 
     private async Task StartWithQuestionsAsync(IReadOnlyList<Question> questions)
@@ -2037,7 +3125,10 @@ public class MainViewModel : ViewModelBase
         SessionTotalCount = currentSession.Count;
         SessionCurrentIndex = 0;
         CorrectCount = 0;
+        GradedCount = 0;
         IsPracticeRunning = true;
+        IsAnswerRevealed = false;
+        IsAnswerSubmissionInProgress = false;
         UserAnswer = string.Empty;
         SessionFeedback = string.Empty;
 
@@ -2045,52 +3136,186 @@ public class MainViewModel : ViewModelBase
         SetCurrentQuestion(currentSession[0]);
         UpdatePracticeState();
 
-        await ReloadWrongAsync();
+        if (!await TryReloadWrongNonFatalAsync("연습 시작 후 오답 목록 갱신"))
+        {
+            Feedback = "연습을 시작했습니다. 오답 목록 표시는 다음 새로고침 때 갱신됩니다.";
+        }
+    }
+
+    private async Task StopPracticeAsync()
+    {
+        if (!CanStopPractice)
+        {
+            return;
+        }
+
+        var confirmed = await ConfirmDestructiveActionAsync(
+            "연습 종료",
+            "현재 연습을 종료하시겠습니까? 이미 채점한 오답 기록은 유지됩니다.",
+            "연습 종료");
+        if (!confirmed)
+        {
+            return;
+        }
+
+        if (!CanStopPractice)
+        {
+            return;
+        }
+
+        const string message = "현재 연습을 종료했습니다. 이미 채점한 오답 기록은 유지됩니다.";
+        currentSession = Array.Empty<Question>();
+        IsPracticeRunning = false;
+        IsAnswerRevealed = false;
+        CurrentQuestion = null;
+        CurrentQuestionImageSlices.Clear();
+        QuestionImageNotice = string.Empty;
+        ResetQuestionImageView();
+        UserAnswer = string.Empty;
+        SessionFeedback = message;
+        Feedback = message;
+        OnPropertyChanged(nameof(CurrentQuestionSourceDisplay));
+        OnPropertyChanged(nameof(CurrentQuestionText));
+        OnPropertyChanged(nameof(CurrentQuestionChoicesText));
+        OnPropertyChanged(nameof(CurrentQuestionSemanticDescription));
+        OnPropertyChanged(nameof(HasCurrentQuestionImages));
+        OnPropertyChanged(nameof(ShowCurrentQuestionText));
+        UpdatePracticeState();
+    }
+
+    private void NotifyAnswerInputValidationState()
+    {
+        OnPropertyChanged(nameof(IsMultipleChoiceAnswerExpected));
+        OnPropertyChanged(nameof(UserAnswerValidationMessage));
+        OnPropertyChanged(nameof(HasUserAnswerValidationError));
+        OnPropertyChanged(nameof(CanSubmitAnswer));
+        OnPropertyChanged(nameof(CanEnterAnswer));
+        OnPropertyChanged(nameof(CanGoToNextQuestion));
+    }
+
+    private static bool TryParsePositiveInteger(string? rawInput, out int answerNumber)
+    {
+        answerNumber = 0;
+        var normalized = rawInput?.Trim() ?? string.Empty;
+        return normalized.Length > 0 &&
+               normalized.All(x => x is >= '0' and <= '9') &&
+               int.TryParse(normalized, out answerNumber) &&
+               answerNumber > 0;
+    }
+
+    private static bool TryParseMultipleChoiceAnswerInput(
+        string? rawInput,
+        Question question,
+        out int answerNumber)
+    {
+        if (!TryParsePositiveInteger(rawInput, out answerNumber))
+        {
+            return false;
+        }
+
+        var choiceCount = question.Choices?.Length ?? 0;
+        return choiceCount == 0 || answerNumber <= choiceCount;
     }
 
     private async Task SubmitAnswerAsync()
     {
-        if (CurrentQuestion == null || !IsPracticeRunning)
+        if (CurrentQuestion == null ||
+            !IsPracticeRunning ||
+            IsAnswerRevealed ||
+            IsAnswerSubmissionInProgress)
         {
             return;
         }
 
         var question = CurrentQuestion;
-        var hasCorrectAnswer = question.CorrectAnswers.Any(x => !string.IsNullOrWhiteSpace(x));
-        if (!hasCorrectAnswer)
+        var hasCorrectAnswer = question.CorrectAnswers?.Any(x => !string.IsNullOrWhiteSpace(x)) == true;
+        if (hasCorrectAnswer &&
+            question.Type == QuestionType.MultipleChoice &&
+            !TryParseMultipleChoiceAnswerInput(UserAnswer, question, out _))
         {
-            SessionFeedback = "정답이 등록되지 않은 문항입니다. 나중에 정답을 매핑한 뒤 채점 가능합니다.";
+            SessionFeedback = UserAnswerValidationMessage;
+            return;
         }
-        else
-        {
-            var isCorrect = AnswerComparer.IsCorrect(question, UserAnswer);
 
-            if (isCorrect)
+        IsAnswerSubmissionInProgress = true;
+        try
+        {
+            var isCorrect = false;
+            if (!hasCorrectAnswer)
             {
-                CorrectCount++;
-                await repository.RemoveWrongAsync(question.Id);
-                SessionFeedback = $"정답: {question.CorrectAnswerDisplay}";
+                SessionFeedback = "정답이 등록되지 않은 문항입니다. 나중에 정답을 매핑한 뒤 채점 가능합니다.";
             }
             else
             {
-                await repository.MarkWrongAsync(question.Id);
-                SessionFeedback = $"오답: 정답은 {question.CorrectAnswerDisplay} 입니다.";
+                isCorrect = AnswerComparer.IsCorrect(question, UserAnswer);
+                if (isCorrect)
+                {
+                    await repository.RemoveWrongAsync(question.Id);
+                }
+                else
+                {
+                    await repository.MarkWrongAsync(question.Id);
+                }
             }
-        }
 
-        await ReloadWrongAsync();
+            var wrongListRefreshSucceeded = !hasCorrectAnswer ||
+                                            await TryReloadWrongNonFatalAsync("채점 후 오답 목록 갱신");
+
+            if (hasCorrectAnswer)
+            {
+                GradedCount++;
+                if (isCorrect)
+                {
+                    CorrectCount++;
+                    SessionFeedback = $"정답: {question.CorrectAnswerDisplay}";
+                }
+                else
+                {
+                    SessionFeedback = $"오답: 정답은 {question.CorrectAnswerDisplay} 입니다.";
+                }
+            }
+
+            if (!wrongListRefreshSucceeded)
+            {
+                SessionFeedback += "\n오답 상태는 저장되었지만 목록 표시는 다음 새로고침 때 갱신됩니다.";
+            }
+
+            IsAnswerRevealed = true;
+        }
+        finally
+        {
+            IsAnswerSubmissionInProgress = false;
+        }
+    }
+
+    private void GoToNextQuestion()
+    {
+        if (!CanGoToNextQuestion)
+        {
+            return;
+        }
 
         if (SessionCurrentIndex + 1 >= SessionTotalCount)
         {
+            var ungradedCount = Math.Max(0, SessionTotalCount - GradedCount);
+            var scoreText = GradedCount == 0
+                ? "채점 가능한 문항이 없습니다"
+                : $"정답 {CorrectCount}/{GradedCount}개";
+            var resultMessage = $"연습 완료: {scoreText}" +
+                                (ungradedCount == 0 ? string.Empty : $" · 미채점 {ungradedCount}개");
             IsPracticeRunning = false;
+            IsAnswerRevealed = false;
             CurrentQuestion = null;
             CurrentQuestionImageSlices.Clear();
+            QuestionImageNotice = string.Empty;
+            ResetQuestionImageView();
             OnPropertyChanged(nameof(CurrentQuestionSourceDisplay));
             OnPropertyChanged(nameof(CurrentQuestionText));
             OnPropertyChanged(nameof(CurrentQuestionChoicesText));
             OnPropertyChanged(nameof(HasCurrentQuestionImages));
             OnPropertyChanged(nameof(ShowCurrentQuestionText));
-            SessionFeedback += $"\n총 {CorrectCount}/{SessionTotalCount}개 정답";
+            SessionFeedback = resultMessage;
+            Feedback = resultMessage;
             UpdatePracticeState();
             return;
         }
@@ -2098,15 +3323,19 @@ public class MainViewModel : ViewModelBase
         SessionCurrentIndex++;
         SetCurrentQuestion(currentSession[SessionCurrentIndex]);
         UserAnswer = string.Empty;
+        SessionFeedback = string.Empty;
+        IsAnswerRevealed = false;
     }
 
     private void SetCurrentQuestion(Question question)
     {
+        ResetQuestionImageView();
         CurrentQuestion = question;
         UpdateCurrentQuestionImageSlices(question);
         OnPropertyChanged(nameof(CurrentQuestionSourceDisplay));
         OnPropertyChanged(nameof(CurrentQuestionText));
         OnPropertyChanged(nameof(CurrentQuestionChoicesText));
+        OnPropertyChanged(nameof(CurrentQuestionSemanticDescription));
         OnPropertyChanged(nameof(HasCurrentQuestionImages));
         OnPropertyChanged(nameof(ShowCurrentQuestionText));
     }
@@ -2114,20 +3343,129 @@ public class MainViewModel : ViewModelBase
     private void UpdateCurrentQuestionImageSlices(Question? question)
     {
         CurrentQuestionImageSlices.Clear();
-        foreach (var slice in BuildQuestionImageSliceViewModels(question))
-        {
-            CurrentQuestionImageSlices.Add(slice);
-        }
-    }
-
-    private IEnumerable<QuestionImageSliceViewModel> BuildQuestionImageSliceViewModels(Question? question)
-    {
-        return QuestionImageSliceBuilder.Build(
+        var result = QuestionImageSliceBuilder.BuildWithStatus(
             question,
             CurrentQuestionImageViewportWidth,
             CurrentQuestionImageViewportHeight,
             MinQuestionImageSliceRatio,
-            MinQuestionImageSliceWidthRatio);
+            MinQuestionImageSliceWidthRatio,
+            QuestionImageZoom);
+        foreach (var slice in result.Slices)
+        {
+            CurrentQuestionImageSlices.Add(slice);
+        }
+
+        QuestionImageNotice = result.UnavailableSegmentCount switch
+        {
+            <= 0 => string.Empty,
+            _ when result.Slices.Count == 0 =>
+                "저장된 문제 이미지를 열 수 없어 OCR 텍스트로 대신 표시합니다.",
+            _ =>
+                $"문제 이미지 {result.StoredSegmentCount}개 중 {result.UnavailableSegmentCount}개를 열 수 없습니다. 파일 검토 화면에서 확인해 주세요."
+        };
+
+        OnPropertyChanged(nameof(HasCurrentQuestionImages));
+        OnPropertyChanged(nameof(ShowCurrentQuestionText));
+    }
+
+    public void SetQuestionImageZoom(double value)
+    {
+        QuestionImageZoom = Math.Clamp(value, MinQuestionImageZoom, MaxQuestionImageZoom);
+    }
+
+    public void SetQuestionImagePreviewScale(double gestureScale, double pinchStartZoom)
+    {
+        var safeStartZoom = Math.Clamp(pinchStartZoom, MinQuestionImageZoom, MaxQuestionImageZoom);
+        var effectiveZoom = Math.Clamp(safeStartZoom * gestureScale, MinQuestionImageZoom, MaxQuestionImageZoom);
+        QuestionImagePreviewScale = effectiveZoom / safeStartZoom;
+    }
+
+    public void CompleteQuestionImagePinch(double pinchStartZoom, double gestureScale, bool canceled)
+    {
+        QuestionImagePreviewScale = 1d;
+        if (!canceled)
+        {
+            SetQuestionImageZoom(pinchStartZoom * gestureScale);
+        }
+    }
+
+    public void UpdateWorkspaceSize(double width, double height)
+    {
+        if (!double.IsFinite(width) || width <= 0d ||
+            !double.IsFinite(height) || height <= 0d)
+        {
+            return;
+        }
+
+        ApplyWorkspaceMetrics(ResponsiveLayoutCalculator.Calculate(
+            width,
+            height,
+            WideWorkspaceMinimumWidth,
+            WideWorkspaceHorizontalChrome,
+            NarrowWorkspaceHorizontalChrome,
+            220d,
+            920d,
+            220d,
+            620d), rebuildImages: true);
+    }
+
+    private void ApplyWorkspaceMetrics(ResponsiveLayoutMetrics metrics, bool rebuildImages)
+    {
+        var layoutChanged = useWideWorkspaceLayout != metrics.UseWideLayout;
+        var viewportChanged =
+            Math.Abs(currentQuestionImageViewportWidth - metrics.ImageViewportWidth) >= 8d ||
+            Math.Abs(currentQuestionImageViewportHeight - metrics.ImageViewportHeight) >= 8d;
+
+        useWideWorkspaceLayout = metrics.UseWideLayout;
+
+        if (layoutChanged)
+        {
+            OnPropertyChanged(nameof(UseWideWorkspaceLayout));
+        }
+
+        if (viewportChanged)
+        {
+            currentQuestionImageViewportWidth = metrics.ImageViewportWidth;
+            currentQuestionImageViewportHeight = metrics.ImageViewportHeight;
+            OnPropertyChanged(nameof(CurrentQuestionImageViewportWidth));
+            OnPropertyChanged(nameof(CurrentQuestionImageViewportHeight));
+            if (rebuildImages && CurrentQuestion != null)
+            {
+                UpdateCurrentQuestionImageSlices(CurrentQuestion);
+            }
+        }
+    }
+
+    private void ResetQuestionImageView()
+    {
+        var zoomChanged = Math.Abs(questionImageZoom - 1d) > 0.001d;
+        questionImageZoom = 1d;
+        QuestionImagePreviewScale = 1d;
+        if (zoomChanged)
+        {
+            OnPropertyChanged(nameof(QuestionImageZoom));
+            OnPropertyChanged(nameof(QuestionImageZoomText));
+            OnPropertyChanged(nameof(CanIncreaseQuestionImageZoom));
+            OnPropertyChanged(nameof(CanDecreaseQuestionImageZoom));
+            OnPropertyChanged(nameof(CanResetQuestionImageZoom));
+            IncreaseQuestionImageZoomCommand.RaiseCanExecuteChanged();
+            DecreaseQuestionImageZoomCommand.RaiseCanExecuteChanged();
+            ResetQuestionImageZoomCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    private async Task<bool> TryReloadWrongNonFatalAsync(string operation)
+    {
+        try
+        {
+            await ReloadWrongAsync();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            AppLog.Error(nameof(MainViewModel), operation, ex);
+            return false;
+        }
     }
 
     private async Task ReloadWrongAsync()
@@ -2158,148 +3496,192 @@ public class MainViewModel : ViewModelBase
             return;
         }
 
-        if (SelectedCategory == null)
+        var targetCategory = SelectedCategory;
+        if (targetCategory == null)
         {
             Feedback = "카테고리를 선택해 주세요.";
             return;
         }
 
-        if (IsPracticeRunning)
+        if (!CanModifyQuestionStructure)
         {
-            Feedback = "진행 중인 연습이 있어 파일을 삭제할 수 없습니다.";
+            Feedback = IsPracticeRunning
+                ? "진행 중인 연습이 있어 파일을 삭제할 수 없습니다."
+                : "문항 분석 중에는 파일을 삭제할 수 없습니다.";
             return;
         }
 
-        var canDelete = await ConfirmDeleteSourceFileAsync(sourceFile.SourceFileName, sourceFile.QuestionCount);
-        if (!canDelete)
+        if (!TryBeginStructuralOperation("다른 문항 구조 변경 작업이 진행 중입니다."))
         {
-            Feedback = "문항 파일 삭제를 취소했습니다.";
             return;
         }
 
-        var removed = await repository.RemoveQuestionsBySourceFileAsync(SelectedCategory.Id, sourceFile.SourceFileName);
-        if (!removed)
+        try
         {
-            Feedback = "삭제할 문제를 찾을 수 없습니다.";
-            return;
-        }
+            var canDelete = await ConfirmDeleteSourceFileAsync(sourceFile.SourceFileName, sourceFile.QuestionCount);
+            if (!canDelete)
+            {
+                Feedback = "등록 문항 삭제를 취소했거나 확인창을 표시할 수 없어 중단했습니다.";
+                return;
+            }
 
-        Feedback = $"파일 '{sourceFile.SourceFileName}' 문항 {sourceFile.QuestionCount}개 삭제 완료";
-        await UpdateSelectedCategoryQuestionCountAsync();
-        await ReloadWrongAsync();
+            var removed = await repository.RemoveQuestionsBySourceFileAsync(targetCategory.Id, sourceFile.SourceFileName);
+            if (!removed)
+            {
+                Feedback = "삭제할 문제를 찾을 수 없습니다.";
+                return;
+            }
+
+            Feedback = $"'{sourceFile.SourceFileName}'의 등록 문항 {sourceFile.QuestionCount}개를 삭제했습니다. 원본 PDF는 유지됩니다.";
+            await UpdateSelectedCategoryQuestionCountAsync();
+            await ReloadWrongAsync();
+        }
+        finally
+        {
+            EndStructuralOperation();
+        }
     }
 
     private static async Task<bool> ConfirmDeleteSourceFileAsync(string sourceFileName, int questionCount)
     {
-        var page = App.CurrentPage;
-        if (page == null)
-        {
-            return true;
-        }
+        var message = $"'{sourceFileName}'에서 앱에 등록된 문항 {questionCount}개를 삭제하시겠습니까?\n" +
+                      "원본 PDF 파일은 삭제하지 않습니다.";
 
-        var message = $"'{sourceFileName}'의 문항 {questionCount}개를 삭제하시겠습니까?";
-
-        return await page.DisplayAlert(
-            "문항 파일 삭제",
+        return await ConfirmDestructiveActionAsync(
+            "등록 문항 삭제",
             message,
-            "삭제",
-            "취소");
+            "삭제");
     }
 
     private async Task DeleteCategoryAsync()
     {
-        if (SelectedCategory == null)
+        var target = SelectedCategory;
+        if (target == null)
         {
             Feedback = "삭제할 카테고리가 없습니다.";
             return;
         }
 
-        if (IsPracticeRunning)
+        if (!CanModifyQuestionStructure)
         {
-            Feedback = "진행 중인 연습이 있어 카테고리를 삭제할 수 없습니다.";
+            Feedback = IsPracticeRunning
+                ? "진행 중인 연습이 있어 카테고리를 삭제할 수 없습니다."
+                : "문항 분석 중에는 카테고리를 삭제할 수 없습니다.";
             return;
         }
 
-        var target = SelectedCategory;
-        var questionCount = selectedCategoryQuestionCount;
-        var canDelete = await ConfirmDeleteAsync(target.Name, questionCount);
-        if (!canDelete)
+        if (!TryBeginStructuralOperation("다른 문항 구조 변경 작업이 진행 중입니다."))
         {
-            Feedback = "카테고리 삭제를 취소했습니다.";
             return;
         }
 
-        var removed = await repository.RemoveCategoryAsync(target.Id);
-        if (!removed)
+        try
         {
-            Feedback = "카테고리를 찾을 수 없습니다.";
-            return;
+            var questionCount = selectedCategoryQuestionCount;
+            var canDelete = await ConfirmDeleteAsync(target.Name, questionCount);
+            if (!canDelete)
+            {
+                Feedback = "카테고리 삭제를 취소했거나 확인창을 표시할 수 없어 중단했습니다.";
+                return;
+            }
+
+            var removed = await repository.RemoveCategoryAsync(target.Id);
+            if (!removed)
+            {
+                Feedback = "카테고리를 찾을 수 없습니다.";
+                return;
+            }
+
+            Categories.Remove(target);
+
+            SelectedCategory = Categories.Count > 0
+                ? Categories[0]
+                : null;
+
+            Feedback = $"카테고리 '{target.Name}' 삭제했습니다.";
+            await UpdateSelectedCategoryQuestionCountAsync();
+            await ReloadWrongAsync();
         }
-
-        Categories.Remove(target);
-
-        SelectedCategory = Categories.Count > 0
-            ? Categories[0]
-            : null;
-
-        Feedback = $"카테고리 '{target.Name}' 삭제했습니다.";
-        await UpdateSelectedCategoryQuestionCountAsync();
-        await ReloadWrongAsync();
+        finally
+        {
+            EndStructuralOperation();
+        }
     }
 
     private static async Task<bool> ConfirmDeleteAsync(string categoryName, int questionCount)
     {
-        var page = App.CurrentPage;
-        if (page == null)
-        {
-            return true;
-        }
-
         var message = $"'{categoryName}' 카테고리를 삭제하면 해당 카테고리의 문제와 오답 목록이 함께 삭제됩니다.\n" +
                       $"{questionCount}개 문항을 모두 삭제하시겠습니까?";
 
-        return await page.DisplayAlert(
+        return await ConfirmDestructiveActionAsync(
             "카테고리 삭제",
             message,
-            "삭제",
-            "취소");
+            "삭제");
     }
 
-    private async Task UpdateSelectedCategoryQuestionCountAsync()
+    private void ResetSelectedCategorySummary()
     {
-        if (SelectedCategory == null)
-        {
-            selectedCategoryQuestionCount = 0;
-            selectedCategoryPracticeQuestionCount = 0;
-            SourceFiles.Clear();
-            SelectedSourceFile = null;
-            OnPropertyChanged(nameof(SelectedCategoryQuestionCountText));
-            OnPropertyChanged(nameof(MaxPracticeCount));
-            UpdatePracticeState();
-            return;
-        }
-
-        var questions = await repository.GetQuestionsAsync(SelectedCategory.Id);
-        selectedCategoryQuestionCount = questions.Count;
-        selectedCategoryPracticeQuestionCount = IncludeUnansweredInPractice
-            ? selectedCategoryQuestionCount
-            : questions.Count(x => x.CorrectAnswers.Any(a => !string.IsNullOrWhiteSpace(a)));
-        await UpdateSourceFilesAsync();
+        selectedCategoryQuestionCount = 0;
+        selectedCategoryPracticeQuestionCount = 0;
+        SourceFiles.Clear();
+        SelectedSourceFile = null;
         OnPropertyChanged(nameof(SelectedCategoryQuestionCountText));
         OnPropertyChanged(nameof(MaxPracticeCount));
         UpdatePracticeState();
     }
 
-    private async Task UpdateSourceFilesAsync()
+    private async Task UpdateSelectedCategoryQuestionCountAsync()
     {
-        if (SelectedCategory == null)
+        var refreshVersion = Interlocked.Increment(ref selectedCategoryRefreshVersion);
+        var targetCategory = SelectedCategory;
+        IsSelectedCategoryLoading = true;
+        try
         {
-            SourceFiles.Clear();
-            SelectedSourceFile = null;
+            if (targetCategory == null)
+            {
+                ResetSelectedCategorySummary();
+                return;
+            }
+
+            var questions = await repository.GetQuestionsAsync(targetCategory.Id);
+            if (refreshVersion != Volatile.Read(ref selectedCategoryRefreshVersion) ||
+                SelectedCategory?.Id != targetCategory.Id)
+            {
+                return;
+            }
+
+            selectedCategoryQuestionCount = questions.Count;
+            selectedCategoryPracticeQuestionCount = questions.Count(x =>
+                x.CorrectAnswers.Any(answer => !string.IsNullOrWhiteSpace(answer)));
+            await UpdateSourceFilesAsync(targetCategory, refreshVersion);
+            if (refreshVersion != Volatile.Read(ref selectedCategoryRefreshVersion) ||
+                SelectedCategory?.Id != targetCategory.Id)
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(SelectedCategoryQuestionCountText));
+            OnPropertyChanged(nameof(MaxPracticeCount));
+            UpdatePracticeState();
+        }
+        finally
+        {
+            if (refreshVersion == Volatile.Read(ref selectedCategoryRefreshVersion))
+            {
+                IsSelectedCategoryLoading = false;
+            }
+        }
+    }
+
+    private async Task UpdateSourceFilesAsync(Category targetCategory, int refreshVersion)
+    {
+        var files = await repository.GetSourceFilesAsync(targetCategory.Id);
+        if (refreshVersion != Volatile.Read(ref selectedCategoryRefreshVersion) ||
+            SelectedCategory?.Id != targetCategory.Id)
+        {
             return;
         }
 
-        var files = await repository.GetSourceFilesAsync(SelectedCategory.Id);
         SourceFiles.Clear();
         foreach (var file in files)
         {
@@ -2326,6 +3708,10 @@ public class MainViewModel : ViewModelBase
     private IEnumerable<string> GetSourceFileSearchDirectories()
     {
         var directories = new List<string> { sourceFileDirectory };
+        if (!ShouldSearchDevelopmentSourceDirectories())
+        {
+            return directories.Distinct(StringComparer.OrdinalIgnoreCase);
+        }
 
         var currentDir = Directory.GetCurrentDirectory();
         if (!string.IsNullOrWhiteSpace(currentDir))
@@ -2346,6 +3732,16 @@ public class MainViewModel : ViewModelBase
         return directories.Distinct(StringComparer.OrdinalIgnoreCase);
     }
 
+    private static bool ShouldSearchDevelopmentSourceDirectories()
+    {
+#if DEBUG
+        return DeviceInfo.Platform != DevicePlatform.Android &&
+               DeviceInfo.Platform != DevicePlatform.iOS;
+#else
+        return false;
+#endif
+    }
+
     private static void AddAncestorSourceDirectories(ICollection<string> directories, string startDirectory)
     {
         var directory = new DirectoryInfo(Path.GetFullPath(startDirectory));
@@ -2358,12 +3754,27 @@ public class MainViewModel : ViewModelBase
 
     private void UpdatePracticeState()
     {
+        OnPropertyChanged(nameof(CanModifyQuestionStructure));
+        OnPropertyChanged(nameof(CanAddCategory));
+        OnPropertyChanged(nameof(CanImportAnswerMap));
         OnPropertyChanged(nameof(CanStartPractice));
         OnPropertyChanged(nameof(CanStartWrongPractice));
         OnPropertyChanged(nameof(ProgressDisplay));
         OnPropertyChanged(nameof(HasSelectedCategory));
         OnPropertyChanged(nameof(CanDeleteCategory));
         OnPropertyChanged(nameof(CanDeleteSourceFile));
+        OnPropertyChanged(nameof(CanStopPractice));
+        UpdateSourceFileActionState();
+        NotifyAnswerInputValidationState();
+    }
+
+    private void UpdateSourceFileActionState()
+    {
+        var canDelete = CanModifyQuestionStructure;
+        foreach (var sourceFile in SourceFiles)
+        {
+            sourceFile.CanDelete = canDelete;
+        }
     }
 
     private void SetWorkspaceSection(string section)
@@ -2657,15 +4068,58 @@ public class MainViewModel : ViewModelBase
         return string.Join(" / ", messages);
     }
 
-    private static PdfAnalysisStructuralIssueDiagnostics[] BuildStructuralIssues(
-        IReadOnlyList<OcrQuestionCandidate> candidates)
+    internal static PdfAnalysisStructuralIssueDiagnostics[] BuildStructuralIssues(
+        IReadOnlyList<OcrQuestionCandidate> candidates,
+        IReadOnlyList<OcrPageResult> pages)
     {
-        if (candidates.Count == 0)
+        var issues = new List<PdfAnalysisStructuralIssueDiagnostics>();
+        foreach (var duplicatePage in pages
+                     .GroupBy(x => x.PageIndex)
+                     .Where(x => x.Count() > 1))
         {
-            return Array.Empty<PdfAnalysisStructuralIssueDiagnostics>();
+            issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+            {
+                Code = "duplicate-page-index",
+                Message = $"p{duplicatePage.Key} 페이지 번호가 {duplicatePage.Count()}번 나타나 문서 순서를 확정할 수 없습니다."
+            });
         }
 
-        var issues = new List<PdfAnalysisStructuralIssueDiagnostics>();
+        foreach (var duplicate in candidates
+                     .GroupBy(x => x.Index)
+                     .Where(x => x.Count() > 1))
+        {
+            issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+            {
+                Code = "duplicate-index",
+                Index = duplicate.Key,
+                Message = $"{duplicate.Key}번 문항 경계가 {duplicate.Count()}개 검출되었습니다. 합본 또는 번호 재시작 여부를 확인해 주세요."
+            });
+        }
+
+        var distinctIndexes = candidates
+            .Select(x => x.Index)
+            .Where(x => x > 0)
+            .Distinct()
+            .OrderBy(x => x)
+            .ToArray();
+        for (var index = 1; index < distinctIndexes.Length; index++)
+        {
+            if (distinctIndexes[index] == distinctIndexes[index - 1] + 1)
+            {
+                continue;
+            }
+
+            issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+            {
+                Code = "nonconsecutive-index",
+                Index = distinctIndexes[index],
+                Message = $"{distinctIndexes[index - 1]}번 다음 문항이 {distinctIndexes[index]}번으로 건너뛰어 번호 연속성을 확인할 수 없습니다."
+            });
+        }
+
+        var pageByIndex = pages
+            .GroupBy(x => x.PageIndex)
+            .ToDictionary(x => x.Key, x => x.First());
         var orderedByIndex = candidates
             .OrderBy(x => x.Index)
             .ThenBy(x => x.StartPage)
@@ -2675,6 +4129,65 @@ public class MainViewModel : ViewModelBase
         for (var i = 0; i < orderedByIndex.Length; i++)
         {
             var candidate = orderedByIndex[i];
+            if (candidate.HasAmbiguousBoundary)
+            {
+                issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                {
+                    Code = "ambiguous-boundary",
+                    Index = candidate.Index,
+                    Message = string.IsNullOrWhiteSpace(candidate.BoundaryIssue)
+                        ? $"{candidate.Index}번 문항 경계를 안전하게 결정할 수 없습니다."
+                        : $"{candidate.Index}번: {candidate.BoundaryIssue}"
+                });
+            }
+
+            var imageRegions = candidate.ImageRegions ?? Array.Empty<OcrQuestionImageRegion>();
+            var sharedContextRegions = candidate.SharedContextRegions ?? Array.Empty<OcrQuestionImageRegion>();
+            if (candidate.UsesSemanticImageRegions && imageRegions.Count == 0)
+            {
+                issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                {
+                    Code = "missing-image-region",
+                    Index = candidate.Index,
+                    Message = $"{candidate.Index}번의 의미 기반 이미지 영역을 만들지 못했습니다."
+                });
+            }
+
+            foreach (var region in sharedContextRegions.Concat(imageRegions))
+            {
+                if (!double.IsFinite(region.LeftRatio) ||
+                    !double.IsFinite(region.TopRatio) ||
+                    !double.IsFinite(region.RightRatio) ||
+                    !double.IsFinite(region.BottomRatio) ||
+                    region.LeftRatio < 0d ||
+                    region.TopRatio < 0d ||
+                    region.RightRatio > 1d ||
+                    region.BottomRatio > 1d ||
+                    region.RightRatio <= region.LeftRatio ||
+                    region.BottomRatio <= region.TopRatio ||
+                    !region.HasReliableGeometry)
+                {
+                    issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                    {
+                        Code = "invalid-image-region",
+                        Index = candidate.Index,
+                        Message = $"{candidate.Index}번의 p{region.PageIndex} 이미지 경계가 유효하지 않습니다."
+                    });
+                }
+
+                if (!pageByIndex.TryGetValue(region.PageIndex, out var regionPage) ||
+                    string.IsNullOrWhiteSpace(regionPage.ImagePath) ||
+                    !File.Exists(regionPage.ImagePath))
+                {
+                    issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                    {
+                        Code = "missing-page-image",
+                        Index = candidate.Index,
+                        Message = $"{candidate.Index}번에 필요한 p{region.PageIndex} 페이지 이미지가 없습니다."
+                    });
+                }
+            }
+
             var boilerplateProbe = BuildStructuralProbeText(candidate, previewLineLimit: 3);
             var blockingPhrase = FindStructuralBlockingBoilerplatePhrase(boilerplateProbe);
             if (!string.IsNullOrWhiteSpace(blockingPhrase))
@@ -2738,12 +4251,79 @@ public class MainViewModel : ViewModelBase
             }
         }
 
+        for (var leftIndex = 0; leftIndex < candidates.Count; leftIndex++)
+        {
+            for (var rightIndex = leftIndex + 1; rightIndex < candidates.Count; rightIndex++)
+            {
+                var leftCandidate = candidates[leftIndex];
+                var rightCandidate = candidates[rightIndex];
+                if (!SemanticImageRegionsOverlap(leftCandidate, rightCandidate))
+                {
+                    continue;
+                }
+
+                issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                {
+                    Code = "overlapping-image-region",
+                    Index = rightCandidate.Index,
+                    Message = $"{leftCandidate.Index}번과 {rightCandidate.Index}번의 이미지 영역이 겹칩니다."
+                });
+            }
+        }
+
+        var distinctSharedRegions = candidates
+            .SelectMany(candidate =>
+                candidate.SharedContextRegions ?? Array.Empty<OcrQuestionImageRegion>())
+            .GroupBy(region =>
+                $"{region.PageIndex}:{region.LeftRatio:F6}:{region.TopRatio:F6}:{region.RightRatio:F6}:{region.BottomRatio:F6}")
+            .Select(group => group.First())
+            .ToArray();
+        foreach (var sharedRegion in distinctSharedRegions)
+        {
+            foreach (var owner in candidates)
+            {
+                var ownedRegions = owner.ImageRegions ?? Array.Empty<OcrQuestionImageRegion>();
+                if (!ownedRegions.Any(ownedRegion => ImageRegionsOverlap(sharedRegion, ownedRegion)))
+                {
+                    continue;
+                }
+
+                issues.Add(new PdfAnalysisStructuralIssueDiagnostics
+                {
+                    Code = "shared-context-image-overlap",
+                    Index = owner.Index,
+                    Message = $"공통 지문 영역과 {owner.Index}번 문항 이미지 영역이 겹칩니다."
+                });
+            }
+        }
+
         return issues
             .GroupBy(x => $"{x.Code}:{x.Index}:{x.Message}")
             .Select(x => x.First())
             .OrderBy(x => x.Index ?? int.MaxValue)
             .ThenBy(x => x.Code)
             .ToArray();
+    }
+
+    internal static bool SemanticImageRegionsOverlap(
+        OcrQuestionCandidate leftCandidate,
+        OcrQuestionCandidate rightCandidate)
+    {
+        var leftRegions = leftCandidate.ImageRegions ?? Array.Empty<OcrQuestionImageRegion>();
+        var rightRegions = rightCandidate.ImageRegions ?? Array.Empty<OcrQuestionImageRegion>();
+        return leftRegions.Any(left => rightRegions.Any(right => ImageRegionsOverlap(left, right)));
+    }
+
+    private static bool ImageRegionsOverlap(
+        OcrQuestionImageRegion left,
+        OcrQuestionImageRegion right)
+    {
+        const double overlapTolerance = 0.001d;
+        return left.PageIndex == right.PageIndex &&
+               Math.Min(left.RightRatio, right.RightRatio) -
+                   Math.Max(left.LeftRatio, right.LeftRatio) > overlapTolerance &&
+               Math.Min(left.BottomRatio, right.BottomRatio) -
+                   Math.Max(left.TopRatio, right.TopRatio) > overlapTolerance;
     }
 
     private static string BuildStructuralProbeText(
@@ -2950,7 +4530,7 @@ public class MainViewModel : ViewModelBase
             })
             .ToArray();
         var expectedQuestionRange = expectedQuestionRangeResolution.Range;
-        var structuralIssues = BuildStructuralIssues(rawCandidates);
+        var structuralIssues = BuildStructuralIssues(rawCandidates, analysis.Pages);
         var missingIndexes = expectedQuestionRange.HasValue
             ? Enumerable.Range(expectedQuestionRange.Value.StartIndex, expectedQuestionRange.Value.Count)
                 .Except(candidateIndexes)
@@ -3127,6 +4707,50 @@ public class MainViewModel : ViewModelBase
         return values.Count == 0 ? "없음" : string.Join(", ", values);
     }
 
+    private static FeedbackTone ResolveFeedbackTone(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return FeedbackTone.Neutral;
+        }
+
+        var normalized = message.Trim();
+        if (new[]
+            {
+                "실패", "오류", "중단", "찾을 수 없", "일치하지 않", "누락", "잘못"
+            }.Any(normalized.Contains))
+        {
+            return FeedbackTone.Error;
+        }
+
+        if (new[]
+            {
+                "취소", "확인", "없습니다", "없어", "지원하지", "정리"
+            }.Any(normalized.Contains))
+        {
+            return FeedbackTone.Warning;
+        }
+
+        if (new[]
+            {
+                "완료", "저장했습니다", "등록했습니다", "추가했습니다", "삭제했습니다",
+                "시작합니다", "시작했습니다", "종료했습니다", "불러왔습니다"
+            }.Any(normalized.Contains))
+        {
+            return FeedbackTone.Success;
+        }
+
+        return FeedbackTone.Neutral;
+    }
+
+    private enum FeedbackTone
+    {
+        Neutral,
+        Success,
+        Warning,
+        Error
+    }
+
     private sealed class PdfAnalysisDiagnostics
     {
         public DateTimeOffset GeneratedAt { get; init; }
@@ -3172,7 +4796,7 @@ public class MainViewModel : ViewModelBase
         public string PreviewText { get; init; } = string.Empty;
     }
 
-    private sealed class PdfAnalysisStructuralIssueDiagnostics
+    internal sealed class PdfAnalysisStructuralIssueDiagnostics
     {
         public string Code { get; init; } = string.Empty;
         public int? Index { get; init; }

@@ -15,4 +15,11 @@ public sealed record OcrQuestionCandidate
     public int EndPageLineCount { get; init; }
     public string? ImagePath { get; init; }
     public string PreviewText { get; init; } = string.Empty;
+    public bool HasAmbiguousBoundary { get; init; }
+    public string BoundaryIssue { get; init; } = string.Empty;
+    public bool UsesSemanticImageRegions { get; init; }
+    public IReadOnlyList<OcrQuestionImageRegion> ImageRegions { get; init; } =
+        Array.Empty<OcrQuestionImageRegion>();
+    public IReadOnlyList<OcrQuestionImageRegion> SharedContextRegions { get; init; } =
+        Array.Empty<OcrQuestionImageRegion>();
 }

@@ -24,7 +24,6 @@
                     Margin="12"
                     IsReadOnly="True"
                     AutoSize="Disabled"
-                    FontFamily="OpenSansRegular"
                     TextColor="#0F172A"
                     BackgroundColor="#FFFFFF" />
         </Frame>

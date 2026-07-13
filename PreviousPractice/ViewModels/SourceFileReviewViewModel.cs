@@ -11,14 +11,14 @@ public sealed class SourceFileReviewViewModel : ViewModelBase
 {
     private const string SourceFileDirectoryName = "QuestionSourceFiles";
     private const string AnalysisDirectoryName = "QuestionSourceOcr";
-    private const double PhoneQuestionImageViewportWidth = 320d;
-    private const double PhoneQuestionImageViewportHeight = 260d;
-    private const double TabletQuestionImageViewportWidth = 560d;
-    private const double TabletQuestionImageViewportHeight = 440d;
-    private const double DesktopQuestionImageViewportWidth = 760d;
-    private const double DesktopQuestionImageViewportHeight = 620d;
     private const double MinQuestionImageSliceRatio = 0.02d;
     private const double MinQuestionImageSliceWidthRatio = 0.08d;
+    private const double MinQuestionImageZoom = 0.75d;
+    private const double MaxQuestionImageZoom = 3.5d;
+    private const double QuestionImageZoomStep = 0.25d;
+    private const double WideLayoutMinimumWidth = 900d;
+    private const double WideLayoutHorizontalChrome = 372d;
+    private const double NarrowLayoutHorizontalChrome = 64d;
 
     private readonly IPracticeRepository repository = new PracticeRepository();
     private readonly string categoryId;
@@ -28,6 +28,12 @@ public sealed class SourceFileReviewViewModel : ViewModelBase
     private string currentAnswerDisplay = string.Empty;
     private string diagnosticsText = string.Empty;
     private string summaryText = "불러오는 중...";
+    private double questionImageZoom = 1d;
+    private double questionImagePreviewScale = 1d;
+    private double currentQuestionImageViewportWidth;
+    private double currentQuestionImageViewportHeight;
+    private string questionImageNotice = string.Empty;
+    private bool useWideLayout;
     private bool isLoading = true;
 
     public SourceFileReviewViewModel(string categoryId, string categoryName, string sourceFileName)
@@ -42,11 +48,37 @@ public sealed class SourceFileReviewViewModel : ViewModelBase
         PageTitle = Path.GetFileName(this.sourceFileName);
         HeaderText = $"{categoryName} / {Path.GetFileName(this.sourceFileName)}";
 
+        var idiom = DeviceInfo.Idiom;
+        var initialWidth = idiom == DeviceIdiom.Desktop
+            ? 1200d
+            : idiom == DeviceIdiom.Tablet
+                ? 900d
+                : 390d;
+        ApplyWorkspaceMetrics(ResponsiveLayoutCalculator.Calculate(
+            initialWidth,
+            idiom == DeviceIdiom.Phone ? 760d : 900d,
+            WideLayoutMinimumWidth,
+            WideLayoutHorizontalChrome,
+            NarrowLayoutHorizontalChrome,
+            220d,
+            900d,
+            220d,
+            700d), rebuildImages: false);
+
         Questions = new ObservableCollection<Question>();
         CurrentQuestionImageSlices = new ObservableCollection<QuestionImageSliceViewModel>();
         PreviousQuestionCommand = new RelayCommand(MovePrevious);
         NextQuestionCommand = new RelayCommand(MoveNext);
         SelectQuestionCommand = new RelayCommand<Question?>(SelectQuestion);
+        IncreaseQuestionImageZoomCommand = new RelayCommand(
+            () => SetQuestionImageZoom(QuestionImageZoom + QuestionImageZoomStep),
+            () => CanIncreaseQuestionImageZoom);
+        DecreaseQuestionImageZoomCommand = new RelayCommand(
+            () => SetQuestionImageZoom(QuestionImageZoom - QuestionImageZoomStep),
+            () => CanDecreaseQuestionImageZoom);
+        ResetQuestionImageZoomCommand = new RelayCommand(
+            () => SetQuestionImageZoom(1d),
+            () => CanResetQuestionImageZoom);
 
         _ = LoadAsync();
     }
@@ -61,6 +93,12 @@ public sealed class SourceFileReviewViewModel : ViewModelBase
 
     public RelayCommand<Question?> SelectQuestionCommand { get; }
 
+    public RelayCommand IncreaseQuestionImageZoomCommand { get; }
+
+    public RelayCommand DecreaseQuestionImageZoomCommand { get; }
+
+    public RelayCommand ResetQuestionImageZoomCommand { get; }
+
     public string PageTitle { get; }
 
     public string HeaderText { get; }
@@ -74,20 +112,40 @@ public sealed class SourceFileReviewViewModel : ViewModelBase
     public string DiagnosticsText
     {
         get => diagnosticsText;
-        private set => SetProperty(ref diagnosticsText, value);
+        private set
+        {
+            if (SetProperty(ref diagnosticsText, value))
+            {
+                OnPropertyChanged(nameof(CanOpenDiagnostics));
+            }
+        }
     }
 
     public bool IsLoading
     {
         get => isLoading;
-        private set => SetProperty(ref isLoading, value);
+        private set
+        {
+            if (SetProperty(ref isLoading, value))
+            {
+                OnPropertyChanged(nameof(CanOpenDiagnostics));
+            }
+        }
     }
+
+    public bool CanOpenDiagnostics =>
+        !IsLoading && !string.IsNullOrWhiteSpace(DiagnosticsText);
 
     public Question? CurrentQuestion
     {
         get => currentQuestion;
         set
         {
+            if (!ReferenceEquals(currentQuestion, value))
+            {
+                ResetQuestionImageView();
+            }
+
             if (SetProperty(ref currentQuestion, value))
             {
                 UpdateCurrentQuestionState();
@@ -135,9 +193,56 @@ public sealed class SourceFileReviewViewModel : ViewModelBase
         Questions.IndexOf(CurrentQuestion) >= 0 &&
         Questions.IndexOf(CurrentQuestion) < Questions.Count - 1;
 
-    public bool UseWideLayout =>
-        DeviceInfo.Idiom == DeviceIdiom.Desktop ||
-        DeviceInfo.Idiom == DeviceIdiom.Tablet;
+    public bool UseWideLayout => useWideLayout;
+
+    public double CurrentQuestionImageViewportHeight => currentQuestionImageViewportHeight;
+
+    public string QuestionImageNotice
+    {
+        get => questionImageNotice;
+        private set
+        {
+            if (SetProperty(ref questionImageNotice, value))
+            {
+                OnPropertyChanged(nameof(HasQuestionImageNotice));
+            }
+        }
+    }
+
+    public bool HasQuestionImageNotice => !string.IsNullOrWhiteSpace(QuestionImageNotice);
+
+    public double QuestionImageZoom
+    {
+        get => questionImageZoom;
+        private set
+        {
+            if (SetProperty(ref questionImageZoom, value))
+            {
+                OnPropertyChanged(nameof(QuestionImageZoomText));
+                OnPropertyChanged(nameof(CanIncreaseQuestionImageZoom));
+                OnPropertyChanged(nameof(CanDecreaseQuestionImageZoom));
+                OnPropertyChanged(nameof(CanResetQuestionImageZoom));
+                IncreaseQuestionImageZoomCommand.RaiseCanExecuteChanged();
+                DecreaseQuestionImageZoomCommand.RaiseCanExecuteChanged();
+                ResetQuestionImageZoomCommand.RaiseCanExecuteChanged();
+                UpdateCurrentQuestionState();
+            }
+        }
+    }
+
+    public string QuestionImageZoomText => $"{QuestionImageZoom * 100:0}%";
+
+    public bool CanIncreaseQuestionImageZoom => QuestionImageZoom < MaxQuestionImageZoom - 0.001d;
+
+    public bool CanDecreaseQuestionImageZoom => QuestionImageZoom > MinQuestionImageZoom + 0.001d;
+
+    public bool CanResetQuestionImageZoom => Math.Abs(QuestionImageZoom - 1d) > 0.001d;
+
+    public double QuestionImagePreviewScale
+    {
+        get => questionImagePreviewScale;
+        private set => SetProperty(ref questionImagePreviewScale, value);
+    }
 
     private async Task LoadAsync()
     {
@@ -218,15 +323,26 @@ public sealed class SourceFileReviewViewModel : ViewModelBase
     private void UpdateCurrentQuestionState()
     {
         CurrentQuestionImageSlices.Clear();
-        foreach (var slice in QuestionImageSliceBuilder.Build(
-                     CurrentQuestion,
-                     CurrentQuestionImageViewportWidth,
-                     CurrentQuestionImageViewportHeight,
-                     MinQuestionImageSliceRatio,
-                     MinQuestionImageSliceWidthRatio))
+        var result = QuestionImageSliceBuilder.BuildWithStatus(
+            CurrentQuestion,
+            currentQuestionImageViewportWidth,
+            currentQuestionImageViewportHeight,
+            MinQuestionImageSliceRatio,
+            MinQuestionImageSliceWidthRatio,
+            QuestionImageZoom);
+        foreach (var slice in result.Slices)
         {
             CurrentQuestionImageSlices.Add(slice);
         }
+
+        QuestionImageNotice = result.UnavailableSegmentCount switch
+        {
+            <= 0 => string.Empty,
+            _ when result.Slices.Count == 0 =>
+                "저장된 문제 이미지를 열 수 없어 OCR 텍스트로 대신 표시합니다.",
+            _ =>
+                $"문제 이미지 {result.StoredSegmentCount}개 중 {result.UnavailableSegmentCount}개를 열 수 없습니다. 진단에서 누락 여부를 확인해 주세요."
+        };
 
         CurrentAnswerDisplay = CurrentQuestion == null
             ? string.Empty
@@ -243,60 +359,109 @@ public sealed class SourceFileReviewViewModel : ViewModelBase
         OnPropertyChanged(nameof(CanGoNext));
     }
 
+    public void SetQuestionImageZoom(double value)
+    {
+        QuestionImageZoom = Math.Clamp(value, MinQuestionImageZoom, MaxQuestionImageZoom);
+    }
+
+    public void SetQuestionImagePreviewScale(double gestureScale, double pinchStartZoom)
+    {
+        var safeStartZoom = Math.Clamp(pinchStartZoom, MinQuestionImageZoom, MaxQuestionImageZoom);
+        var effectiveZoom = Math.Clamp(safeStartZoom * gestureScale, MinQuestionImageZoom, MaxQuestionImageZoom);
+        QuestionImagePreviewScale = effectiveZoom / safeStartZoom;
+    }
+
+    public void CompleteQuestionImagePinch(double pinchStartZoom, double gestureScale, bool canceled)
+    {
+        QuestionImagePreviewScale = 1d;
+        if (!canceled)
+        {
+            SetQuestionImageZoom(pinchStartZoom * gestureScale);
+        }
+    }
+
+    public void UpdateWorkspaceSize(double width, double height)
+    {
+        if (!double.IsFinite(width) || width <= 0d ||
+            !double.IsFinite(height) || height <= 0d)
+        {
+            return;
+        }
+
+        ApplyWorkspaceMetrics(ResponsiveLayoutCalculator.Calculate(
+            width,
+            height,
+            WideLayoutMinimumWidth,
+            WideLayoutHorizontalChrome,
+            NarrowLayoutHorizontalChrome,
+            220d,
+            900d,
+            220d,
+            700d), rebuildImages: true);
+    }
+
+    private void ApplyWorkspaceMetrics(ResponsiveLayoutMetrics metrics, bool rebuildImages)
+    {
+        var layoutChanged = useWideLayout != metrics.UseWideLayout;
+        var viewportChanged =
+            Math.Abs(currentQuestionImageViewportWidth - metrics.ImageViewportWidth) >= 8d ||
+            Math.Abs(currentQuestionImageViewportHeight - metrics.ImageViewportHeight) >= 8d;
+
+        useWideLayout = metrics.UseWideLayout;
+
+        if (layoutChanged)
+        {
+            OnPropertyChanged(nameof(UseWideLayout));
+        }
+
+        if (viewportChanged)
+        {
+            currentQuestionImageViewportWidth = metrics.ImageViewportWidth;
+            currentQuestionImageViewportHeight = metrics.ImageViewportHeight;
+            OnPropertyChanged(nameof(CurrentQuestionImageViewportHeight));
+            if (rebuildImages && CurrentQuestion != null)
+            {
+                UpdateCurrentQuestionState();
+            }
+        }
+    }
+
+    private void ResetQuestionImageView()
+    {
+        var zoomChanged = Math.Abs(questionImageZoom - 1d) > 0.001d;
+        questionImageZoom = 1d;
+        QuestionImagePreviewScale = 1d;
+        if (zoomChanged)
+        {
+            OnPropertyChanged(nameof(QuestionImageZoom));
+            OnPropertyChanged(nameof(QuestionImageZoomText));
+            OnPropertyChanged(nameof(CanIncreaseQuestionImageZoom));
+            OnPropertyChanged(nameof(CanDecreaseQuestionImageZoom));
+            OnPropertyChanged(nameof(CanResetQuestionImageZoom));
+            IncreaseQuestionImageZoomCommand.RaiseCanExecuteChanged();
+            DecreaseQuestionImageZoomCommand.RaiseCanExecuteChanged();
+            ResetQuestionImageZoomCommand.RaiseCanExecuteChanged();
+        }
+    }
+
     private async Task<string> LoadDiagnosticsTextAsync()
     {
         try
         {
             var safeFileName = GetSafeFileNameWithoutExtension(sourceFileName);
-            var diagnosticsPath = Path.Combine(sourceAnalysisDirectory, $"{safeFileName}.diagnostics.txt");
+            var diagnosticsPath = Path.Combine(
+                sourceAnalysisDirectory,
+                $"{safeFileName}.committed.diagnostics.txt");
             if (File.Exists(diagnosticsPath))
             {
                 return await File.ReadAllTextAsync(diagnosticsPath);
             }
 
-            return "저장된 분석 진단 파일이 없습니다.";
+            return "이 버전에서 문항과 함께 확정 저장된 분석 진단 파일이 없습니다.";
         }
         catch (Exception ex)
         {
             return $"분석 진단 읽기 실패: {ex.Message}";
-        }
-    }
-
-    private double CurrentQuestionImageViewportWidth
-    {
-        get
-        {
-            var idiom = DeviceInfo.Idiom;
-            if (idiom == DeviceIdiom.Desktop)
-            {
-                return DesktopQuestionImageViewportWidth;
-            }
-
-            if (idiom == DeviceIdiom.Tablet)
-            {
-                return TabletQuestionImageViewportWidth;
-            }
-
-            return PhoneQuestionImageViewportWidth;
-        }
-    }
-
-    private double CurrentQuestionImageViewportHeight
-    {
-        get
-        {
-            var idiom = DeviceInfo.Idiom;
-            if (idiom == DeviceIdiom.Desktop)
-            {
-                return DesktopQuestionImageViewportHeight;
-            }
-
-            if (idiom == DeviceIdiom.Tablet)
-            {
-                return TabletQuestionImageViewportHeight;
-            }
-
-            return PhoneQuestionImageViewportHeight;
         }
     }
 
