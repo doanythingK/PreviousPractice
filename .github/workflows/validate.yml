@@ -12,7 +12,7 @@ permissions:
 jobs:
   windows-build-and-test:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -23,13 +23,17 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
-      - name: Restore MAUI workloads
+      - name: Install Windows MAUI workload
         shell: pwsh
-        run: dotnet workload restore PreviousPractice/PreviousPractice.csproj
+        run: dotnet workload install maui-windows --skip-manifest-update
 
-      - name: Restore
+      - name: Restore Windows app target
         shell: pwsh
-        run: dotnet restore PreviousPractice.sln
+        run: dotnet restore PreviousPractice/PreviousPractice.csproj -p:TargetFramework=net9.0-windows10.0.19041.0
+
+      - name: Restore regression tests
+        shell: pwsh
+        run: dotnet restore PreviousPractice.Tests/PreviousPractice.Tests.csproj
 
       - name: Build Windows target
         shell: pwsh
