@@ -6,6 +6,10 @@ on:
       - refactor/architecture-convergence
   pull_request:
 
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
