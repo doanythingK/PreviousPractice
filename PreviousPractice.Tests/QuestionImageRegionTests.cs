@@ -1,4 +1,5 @@
 using PreviousPractice.Models;
+using PreviousPractice.Services;
 using PreviousPractice.ViewModels;
 
 namespace PreviousPractice.Tests;
@@ -108,7 +109,7 @@ public sealed class QuestionImageRegionTests
         Assert.Empty(segments);
 
         var issue = Assert.Single(
-            MainViewModel.BuildStructuralIssues(new[] { candidate }, new[] { page }),
+            PdfStructuralValidator.Validate(new[] { candidate }, new[] { page }),
             x => x.Code == "missing-image-region");
         Assert.Equal(1, issue.Index);
     }
@@ -134,11 +135,11 @@ public sealed class QuestionImageRegionTests
             SharedContextRegions = new[] { Region(1, -1, .02, 1d, .10) }
         };
 
-        Assert.True(MainViewModel.SemanticImageRegionsOverlap(first, overlapping));
-        Assert.False(MainViewModel.SemanticImageRegionsOverlap(first, adjacent));
+        Assert.True(PdfStructuralValidator.SemanticImageRegionsOverlap(first, overlapping));
+        Assert.False(PdfStructuralValidator.SemanticImageRegionsOverlap(first, adjacent));
 
         var overlapIssue = Assert.Single(
-            MainViewModel.BuildStructuralIssues(
+            PdfStructuralValidator.Validate(
                 new[] { first, overlapping },
                 Array.Empty<OcrPageResult>()),
             x => x.Code == "overlapping-image-region");
@@ -161,7 +162,7 @@ public sealed class QuestionImageRegionTests
         };
 
         var issue = Assert.Single(
-            MainViewModel.BuildStructuralIssues(
+            PdfStructuralValidator.Validate(
                 new[] { sharedOwner, coveredQuestion },
                 Array.Empty<OcrPageResult>()),
             x => x.Code == "shared-context-image-overlap");
@@ -180,7 +181,7 @@ public sealed class QuestionImageRegionTests
         };
 
         var issue = Assert.Single(
-            MainViewModel.BuildStructuralIssues(candidates, Array.Empty<OcrPageResult>()),
+            PdfStructuralValidator.Validate(candidates, Array.Empty<OcrPageResult>()),
             x => x.Code == "nonconsecutive-index");
 
         Assert.Equal(4, issue.Index);

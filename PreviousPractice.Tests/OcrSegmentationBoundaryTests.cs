@@ -1,5 +1,6 @@
 using PreviousPractice.Infrastructure;
 using PreviousPractice.Models;
+using PreviousPractice.Services;
 using PreviousPractice.ViewModels;
 
 namespace PreviousPractice.Tests;
@@ -671,7 +672,7 @@ public sealed class OcrSegmentationBoundaryTests
         var shared = Assert.Single(candidates[0].SharedContextRegions);
         Assert.Equal(shared, Assert.Single(candidates[1].SharedContextRegions));
         Assert.True(shared.BottomRatio <= candidates[1].ImageRegions[0].TopRatio + .000_001d);
-        Assert.False(MainViewModel.SemanticImageRegionsOverlap(
+        Assert.False(PdfStructuralValidator.SemanticImageRegionsOverlap(
             new OcrQuestionCandidate { ImageRegions = new[] { shared } },
             candidates[1]));
     }
@@ -692,7 +693,7 @@ public sealed class OcrSegmentationBoundaryTests
             new QuestionNumberRange(1, 4));
 
         var issue = Assert.Single(
-            MainViewModel.BuildStructuralIssues(candidates, new[] { page }),
+            PdfStructuralValidator.Validate(candidates, new[] { page }),
             item => item.Code == "shared-context-image-overlap" && item.Index == 3);
         Assert.Contains("3번", issue.Message);
     }
@@ -1108,7 +1109,7 @@ public sealed class OcrSegmentationBoundaryTests
             firstRegions,
             region => region.ColumnIndex == 1 && region.TopRatio < .20d);
         Assert.False(
-            MainViewModel.SemanticImageRegionsOverlap(candidates[0], candidates[2]),
+            PdfStructuralValidator.SemanticImageRegionsOverlap(candidates[0], candidates[2]),
             $"q1={string.Join(';', candidates[0].ImageRegions)} q3={string.Join(';', candidates[2].ImageRegions)}");
     }
 

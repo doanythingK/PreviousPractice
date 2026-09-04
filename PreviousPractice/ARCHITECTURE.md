@@ -55,11 +55,11 @@
 
 ## 다음 분리 대상
 
-### 1. OCR 구조 검증
+### 1. OCR 구조 검증 — 1차 완료
 
-현재 `MainViewModel.Diagnostics.cs` 안의 구조 검증 계산은 UI 상태와 직접 관계없는 순수 규칙이 많습니다.
+순수 구조 검증 규칙은 `Services/PdfStructuralValidator.cs`로 이동했습니다. `MainViewModel`은 검증을 호출하고 결과를 진단 DTO/화면 메시지로 변환하는 역할만 유지합니다.
 
-다음 단계에서는 아래 책임을 `PdfStructuralValidator` 계열 클래스로 이동합니다.
+현재 validator가 소유하는 책임은 다음과 같습니다.
 
 - 중복 문항 번호
 - 비연속 문항 번호
