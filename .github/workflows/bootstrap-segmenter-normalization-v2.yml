@@ -43,3 +43,5 @@ jobs:
                   PreviousPractice/ARCHITECTURE.md
           git commit -m "refactor: split OCR document normalization"
           git push origin HEAD:refactor/architecture-convergence
+
+# retry after declaration-only extractor fix
