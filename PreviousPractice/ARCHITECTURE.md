@@ -42,7 +42,8 @@
 
 - `Services/AnswerComparer.cs`
 - `Services/PdfAnalysisService.cs`
-- 분석/채점 등의 유스케이스와 플랫폼 OCR 진입점을 소유합니다.
+- `Services/PdfStructuralValidator.cs`
+- 분석/채점/구조 검증 등의 유스케이스와 플랫폼 OCR 진입점을 소유합니다.
 
 향후 `PdfAnalysisService` 내부의 Windows/Android/Mac 구현은 플랫폼 어댑터로 분리하되, 외부 `IPdfAnalysisService` 계약은 가능한 한 유지합니다.
 
@@ -68,7 +69,7 @@
 - 공통 지문과 문항 이미지 겹침
 - 신뢰할 수 없는 geometry 차단
 
-ViewModel은 검증 결과를 화면용 메시지로 변환하는 역할만 유지합니다.
+기존 구조 검증 회귀 테스트도 `MainViewModel` 대신 `PdfStructuralValidator` 경계를 직접 호출하도록 전환했습니다.
 
 ### 2. OCR 문항 분할
 
@@ -110,10 +111,11 @@ ViewModel은 검증 결과를 화면용 메시지로 변환하는 역할만 유�
 
 `refactor/architecture-convergence` 브랜치는 `.github/workflows/validate.yml`에서 다음을 검증합니다.
 
-1. .NET/MAUI workload restore
-2. 솔루션 restore
+1. Windows MAUI workload 설치
+2. Windows 앱 target restore
 3. Windows Release build
-4. `PreviousPractice.Tests` 전체 실행
+4. 테스트 프로젝트 restore
+5. `PreviousPractice.Tests` 전체 실행
 
 구조 변경은 이 검증이 성공한 상태에서만 다음 절편으로 진행합니다.
 
