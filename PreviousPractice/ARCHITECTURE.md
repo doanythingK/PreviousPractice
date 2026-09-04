@@ -71,11 +71,12 @@
 
 기존 구조 검증 회귀 테스트도 `MainViewModel` 대신 `PdfStructuralValidator` 경계를 직접 호출하도록 전환했습니다.
 
-### 2. OCR 문항 분할
+### 2. OCR 문항 분할 — 진행 중
 
-`OcrQuestionSegmenter`는 외부 facade를 유지하면서 내부를 다음 책임으로 나눕니다.
+외부 `OcrQuestionSegmenter` facade와 판정 규칙은 유지합니다. 1차로 document normalization과 page/column layout 계산을 `Infrastructure/OcrQuestionSegmenter.Normalization.cs`로 물리 분리했습니다.
 
-- document normalization
+남은 내부 분리 대상은 다음과 같습니다.
+
 - header hypothesis 수집
 - header path/sequence 선택
 - page/column layout 판정
