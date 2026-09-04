@@ -1,0 +1,110 @@
+name: Bootstrap structural validator extraction
+
+on:
+  push:
+    branches:
+      - refactor/architecture-convergence
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    if: contains(github.event.head_commit.message, 'bootstrap structural validator extraction')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: refactor/architecture-convergence
+          fetch-depth: 0
+
+      - name: Move structural validation out of MainViewModel
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          diagnostics_path = Path('PreviousPractice/ViewModels/MainViewModel.Diagnostics.cs')
+          diagnostics = diagnostics_path.read_text(encoding='utf-8')
+          method_start = '    internal static PdfAnalysisStructuralIssueDiagnostics[] BuildStructuralIssues('
+          method_end = '    private static string BuildCandidateMismatchMessage('
+          if method_start not in diagnostics or method_end not in diagnostics:
+              raise SystemExit('structural method markers not found')
+          start = diagnostics.index(method_start)
+          end = diagnostics.index(method_end, start)
+          diagnostics = diagnostics[:start] + diagnostics[end:]
+
+          old_call = '        var structuralIssues = BuildStructuralIssues(rawCandidates, analysis.Pages);'
+          new_call = '''        var structuralIssues = PdfStructuralValidator.Validate(rawCandidates, analysis.Pages)\n            .Select(issue => new PdfAnalysisStructuralIssueDiagnostics\n            {\n                Code = issue.Code,\n                Index = issue.Index,\n                Message = issue.Message\n            })\n            .ToArray();'''
+          if old_call not in diagnostics:
+              raise SystemExit('structural validation call not found')
+          diagnostics = diagnostics.replace(old_call, new_call, 1)
+          diagnostics_path.write_text(diagnostics, encoding='utf-8')
+
+          main_path = Path('PreviousPractice/ViewModels/MainViewModel.cs')
+          main = main_path.read_text(encoding='utf-8')
+          constants_start = '    private static readonly Regex StructuralSharedContextMarkerRegex = new('
+          constants_end = '    public ObservableCollection<Category> Categories { get; } = new();'
+          if constants_start not in main or constants_end not in main:
+              raise SystemExit('structural constant markers not found')
+          start = main.index(constants_start)
+          end = main.index(constants_end, start)
+          main = main[:start] + main[end:]
+
+          helpers_start = '    internal static bool SemanticImageRegionsOverlap('
+          helpers_end = '    private static string NormalizeSourceFileName('
+          if helpers_start not in main or helpers_end not in main:
+              raise SystemExit('structural helper markers not found')
+          start = main.index(helpers_start)
+          end = main.index(helpers_end, start)
+          main = main[:start] + main[end:]
+          main_path.write_text(main, encoding='utf-8')
+
+          tests_dir = Path('PreviousPractice.Tests')
+          changed_tests = []
+          for path in tests_dir.glob('*.cs'):
+              text = path.read_text(encoding='utf-8')
+              updated = text.replace('MainViewModel.BuildStructuralIssues', 'PdfStructuralValidator.Validate')
+              updated = updated.replace('MainViewModel.SemanticImageRegionsOverlap', 'PdfStructuralValidator.SemanticImageRegionsOverlap')
+              if updated == text:
+                  continue
+              if 'using PreviousPractice.Services;' not in updated:
+                  anchor = 'using PreviousPractice.Models;\n'
+                  if anchor in updated:
+                      updated = updated.replace(anchor, anchor + 'using PreviousPractice.Services;\n', 1)
+                  else:
+                      updated = 'using PreviousPractice.Services;\n' + updated
+              path.write_text(updated, encoding='utf-8')
+              changed_tests.append(str(path))
+
+          if not changed_tests:
+              raise SystemExit('no structural validator test references updated')
+
+          architecture_path = Path('PreviousPractice/ARCHITECTURE.md')
+          architecture = architecture_path.read_text(encoding='utf-8')
+          old = '''### 1. OCR 구조 검증\n\n현재 `MainViewModel.Diagnostics.cs` 안의 구조 검증 계산은 UI 상태와 직접 관계없는 순수 규칙이 많습니다.\n\n다음 단계에서는 아래 책임을 `PdfStructuralValidator` 계열 클래스로 이동합니다.\n'''
+          new = '''### 1. OCR 구조 검증 — 1차 완료\n\n순수 구조 검증 규칙은 `Services/PdfStructuralValidator.cs`로 이동했습니다. `MainViewModel`은 검증을 호출하고 결과를 진단 DTO/화면 메시지로 변환하는 역할만 유지합니다.\n\n현재 validator가 소유하는 책임은 다음과 같습니다.\n'''
+          if old not in architecture:
+              raise SystemExit('architecture structural section marker not found')
+          architecture = architecture.replace(old, new, 1)
+          architecture_path.write_text(architecture, encoding='utf-8')
+          PY
+
+      - name: Check diff
+        shell: bash
+        run: |
+          git diff --check
+          git diff --stat
+          grep -R "MainViewModel.BuildStructuralIssues\|MainViewModel.SemanticImageRegionsOverlap" PreviousPractice.Tests && exit 1 || true
+          grep -R "internal static PdfAnalysisStructuralIssueDiagnostics\[\] BuildStructuralIssues\|internal static bool SemanticImageRegionsOverlap" PreviousPractice/ViewModels && exit 1 || true
+
+      - name: Commit extraction and remove bootstrap workflow
+        shell: bash
+        run: |
+          git config user.name "doanythingK"
+          git config user.email "166168110+doanythingK@users.noreply.github.com"
+          git add PreviousPractice PreviousPractice.Tests
+          git rm .github/workflows/bootstrap-structural-validator.yml
+          git commit -m "refactor: extract PDF structural validation"
+          git push origin HEAD:refactor/architecture-convergence
