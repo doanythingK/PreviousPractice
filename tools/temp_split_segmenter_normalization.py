@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 source_path = Path('PreviousPractice/Infrastructure/OcrQuestionSegmenter.cs')
@@ -29,15 +30,14 @@ method_names = {
 
 
 def method_range(text: str, name: str):
-    needle = name + '('
-    name_pos = text.find(needle)
-    if name_pos < 0:
-        raise RuntimeError(f'method not found: {name}')
-    start = text.rfind('\n    private static ', 0, name_pos)
-    if start < 0:
+    declaration = re.compile(
+        rf'(?m)^    private static [^\n]*\b{re.escape(name)}\s*\('
+    ).search(text)
+    if declaration is None:
         raise RuntimeError(f'method declaration not found: {name}')
-    start += 1
-    brace = text.find('{', name_pos)
+
+    start = declaration.start()
+    brace = text.find('{', declaration.end())
     if brace < 0:
         raise RuntimeError(f'opening brace not found: {name}')
 
