@@ -50,6 +50,7 @@
 ### Infrastructure
 
 - `Infrastructure/OcrQuestionSegmenter.cs`
+- `Infrastructure/OcrQuestionSegmenter.Normalization.cs`
 - `Infrastructure/QuestionSetParser.cs`
 - `Data/PracticeRepository.cs`
 - 파일/JSON/OCR 분할처럼 외부 표현이나 영속화에 가까운 구현을 소유합니다.
@@ -79,11 +80,10 @@
 
 - header hypothesis 수집
 - header path/sequence 선택
-- page/column layout 판정
 - shared context 해석
 - image region 계산
 
-규칙 분리 중에는 기존 `OcrQuestionSegmenterTests`와 `OcrSegmentationBoundaryTests` 결과를 변경하지 않습니다.
+다음 절편은 header hypothesis 수집 책임을 분리합니다. 규칙 분리 중에는 기존 `OcrQuestionSegmenterTests`와 `OcrSegmentationBoundaryTests` 결과를 변경하지 않습니다.
 
 ### 3. PDF 플랫폼 분석
 
