@@ -1,0 +1,40 @@
+name: Validate
+
+on:
+  push:
+    branches:
+      - refactor/architecture-convergence
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build-and-test:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore MAUI workloads
+        shell: pwsh
+        run: dotnet workload restore PreviousPractice/PreviousPractice.csproj
+
+      - name: Restore
+        shell: pwsh
+        run: dotnet restore PreviousPractice.sln
+
+      - name: Build Windows target
+        shell: pwsh
+        run: dotnet build PreviousPractice/PreviousPractice.csproj -c Release -f net9.0-windows10.0.19041.0 --no-restore
+
+      - name: Run regression tests
+        shell: pwsh
+        run: dotnet test PreviousPractice.Tests/PreviousPractice.Tests.csproj -c Release --no-restore --logger "console;verbosity=normal"
