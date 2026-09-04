@@ -168,8 +168,7 @@ jobs:
           for output_path, method_names in groups.items():
               spans = []
               for method_name in method_names:
-                  found = method_spans(text, method_name)
-                  spans.extend(found)
+                  spans.extend(method_spans(text, method_name))
               spans = sorted(set(spans))
               if spans:
                   assigned[output_path] = spans
@@ -183,9 +182,8 @@ jobs:
           for output_path, spans in assigned.items():
               blocks = [text[start:end].rstrip() for start, end in spans]
               content = header + 'public partial class MainViewModel\n{\n' + '\n\n'.join(blocks) + '\n}\n'
-              target = Path(output_path)
-              target.write_text(content, encoding='utf-8')
-              print(f'{target}: moved {len(blocks)} method block(s)')
+              Path(output_path).write_text(content, encoding='utf-8')
+              print(f'{output_path}: moved {len(blocks)} method block(s)')
 
           for start, end in sorted(all_spans, reverse=True):
               text = text[:start] + text[end:]
@@ -210,6 +208,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add PreviousPractice/ViewModels .github/workflows/bootstrap-refactor.yml
+          git add -A
           git commit -m "refactor: split MainViewModel responsibilities"
           git push origin HEAD:refactor/architecture-convergence
